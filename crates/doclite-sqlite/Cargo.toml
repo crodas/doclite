@@ -1,0 +1,30 @@
+[package]
+name = "doclite-sqlite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+description = "The SQLite engine for DocLite"
+keywords = ["database", "sqlite", "engine", "embedded", "storage"]
+categories = ["database-implementations"]
+
+[lints]
+workspace = true
+
+[dependencies]
+doclite-core.workspace = true
+async-trait.workspace = true
+rusqlite.workspace = true
+futures-channel.workspace = true
+
+[dev-dependencies]
+doclite-core = { workspace = true, features = ["cbor"] }
+# A regular dependency is not on an integration test's path, and reading the
+# storage class back is the whole of what `tests/bodies.rs` asserts.
+rusqlite.workspace = true
+doclite-testkit = { path = "../doclite-testkit" }
+async-trait.workspace = true
+serde.workspace = true
+tokio.workspace = true

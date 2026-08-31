@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Two runners because the SQLite engine compiles a bundled C library and
+  # touches the filesystem, and neither is the same on both.
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        run: rustup toolchain install stable --profile minimal --no-self-update
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ matrix.os }}-cargo-
+
+      # Both, because neither feature is on by default and running with them
+      # off is what says the byte API still stands on its own.
+      - run: cargo test --workspace
+      - run: cargo test --workspace --all-features
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update \
+            --component rustfmt --component clippy
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: lint-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: lint-cargo-
+
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo doc --no-deps --workspace --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # The `rust-version` every manifest claims is a promise to callers, so it is
+  # checked rather than asserted. Raising it means editing this and the
+  # workspace manifest together.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        run: rustup toolchain install 1.82 --profile minimal --no-self-update
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: msrv-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: msrv-cargo-
+
+      - run: cargo +1.82 check --workspace --all-targets --all-features
+
+  # What `cargo publish --dry-run` cannot answer before a first release: that
+  # every crate carries its license and its readme. See docs/releasing.md.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        run: rustup toolchain install stable --profile minimal --no-self-update
+
+      # `--allow-dirty` because a checkout is clean and a stray generated file
+      # would otherwise fail this with "changes that were not yet committed",
+      # which reads as a packaging problem and is not one. Listing files is all
+      # this does, so there is nothing for the flag to let through.
+      - name: Every crate ships its license and its readme
+        run: |
+          for crate in doclite-core doclite-derive doclite-store \
+                       doclite-testkit doclite-memory doclite-sqlite doclite; do
+            files=$(cargo package --list -p "$crate" --allow-dirty)
+            for wanted in LICENSE README.md; do
+              echo "$files" | grep -qx "$wanted" \
+                || { echo "$crate does not ship $wanted"; exit 1; }
+            done
+            echo "$crate ships both"
+          done

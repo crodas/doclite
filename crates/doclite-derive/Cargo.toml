@@ -1,0 +1,22 @@
+[package]
+name = "doclite-derive"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+description = "The derive macros for DocLite's document layer"
+keywords = ["database", "derive", "macro", "document"]
+categories = ["development-tools::procedural-macro-helpers", "database"]
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true
+
+[dependencies]
+syn.workspace = true
+quote.workspace = true
+proc-macro2.workspace = true

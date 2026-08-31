@@ -1,0 +1,25 @@
+[package]
+name = "doclite-memory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+description = "The in-process engine for DocLite"
+keywords = ["database", "memory", "engine", "embedded"]
+categories = ["database-implementations"]
+
+[lints]
+workspace = true
+
+[dependencies]
+doclite-core.workspace = true
+doclite-store.workspace = true
+
+[dev-dependencies]
+doclite-core = { workspace = true, features = ["cbor"] }
+doclite-testkit = { path = "../doclite-testkit" }
+async-trait.workspace = true
+serde.workspace = true
+tokio.workspace = true

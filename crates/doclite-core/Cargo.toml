@@ -1,0 +1,44 @@
+[package]
+name = "doclite-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+description = "Objects under an id, indexes over byte tuples, and transactional operations built as values"
+keywords = ["database", "storage", "embedded", "transactions", "index"]
+categories = ["database-implementations", "database"]
+
+# Neither feature is on by default, and docs.rs builds with defaults. Without
+# this the published docs describe `serde_storage!` on the front page and have
+# no page for it, because the item it names is behind `cbor`.
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+serde = { workspace = true, optional = true }
+ciborium = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio.workspace = true
+
+[features]
+default = []
+
+# Serialize on the operation representation, so an operation can be shipped.
+serde = ["dep:serde"]
+
+# The object codec: `serde_storage!` encodes a value as CBOR. Separate from
+# `serde` above, which is about a different half of the crate.
+cbor = ["dep:serde", "dep:ciborium"]
+
+# The other object codec: `json_storage!` encodes a value as JSON. Additive with
+# `cbor`, because a record picks its own and two records need not agree.
+json = ["dep:serde", "dep:serde_json"]

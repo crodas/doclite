@@ -1,0 +1,30 @@
+[package]
+name = "doclite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+description = "A typed document layer over DocLite: revisions, derived indexes, and a query builder"
+keywords = ["database", "document", "embedded", "sqlite", "storage"]
+categories = ["database", "database-implementations"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# `cbor` and `json` are the two object codecs, and a record picks one with
+# `#[storage(..)]`. `serde` is enabled for `ObjectId`'s own derives, so one
+# record can hold another's `DocumentId` as a field.
+doclite-core = { workspace = true, features = ["cbor", "json", "serde"] }
+doclite-derive.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+doclite-memory = { path = "../doclite-memory" }
+doclite-sqlite = { path = "../doclite-sqlite" }
+tokio.workspace = true

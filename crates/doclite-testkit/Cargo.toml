@@ -1,0 +1,18 @@
+[package]
+name = "doclite-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+description = "What makes a DocLite engine correct, as a suite any engine can be run against"
+keywords = ["database", "testing", "conformance", "engine"]
+categories = ["development-tools::testing", "database-implementations"]
+
+[lints]
+workspace = true
+
+[dependencies]
+doclite-core.workspace = true
+async-trait.workspace = true

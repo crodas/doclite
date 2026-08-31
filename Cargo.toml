@@ -1,0 +1,43 @@
+[workspace]
+members = [
+    "crates/doclite",
+    "crates/doclite-core",
+    "crates/doclite-derive",
+    "crates/doclite-memory",
+    "crates/doclite-sqlite",
+    "crates/doclite-store",
+    "crates/doclite-testkit",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/crodas/doclite"
+rust-version = "1.82"
+readme = "README.md"
+
+[workspace.lints.rust]
+# Every public item carries a doc comment, fields and enum variants included.
+# Set here rather than as a crate attribute so a new member cannot opt out by
+# forgetting one.
+missing_docs = "deny"
+
+[workspace.dependencies]
+doclite-core = { path = "crates/doclite-core", version = "0.1.0" }
+doclite-derive = { path = "crates/doclite-derive", version = "0.1.0" }
+doclite-store = { path = "crates/doclite-store", version = "0.1.0" }
+syn = { version = "2.0", features = ["full"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+async-trait = "0.1"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+ciborium = "0.2"
+# `raw_value` is what lets a revision envelope nest an already-encoded record
+# without parsing and re-serialising it.
+serde_json = { version = "1.0", features = ["raw_value"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+futures-channel = { version = "0.3", default-features = false, features = ["std"] }

@@ -1,0 +1,21 @@
+[package]
+name = "doclite-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+description = "The batch protocol, written once, for engines that keep ordered rows"
+keywords = ["database", "storage", "engine", "embedded"]
+categories = ["database-implementations"]
+
+[lints]
+workspace = true
+
+[dependencies]
+doclite-core.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
