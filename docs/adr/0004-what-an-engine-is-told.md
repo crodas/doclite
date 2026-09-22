@@ -19,6 +19,8 @@ executor then filters, so ignoring costs time and never correctness.
 |---|---|
 | `range` | a superset; the executor filters |
 | `limit` | every matching row; the executor trims |
+| `Engine::plan` | the read is taken apart into flat scans instead |
+| `Engine::takes_sweep` | the executor expands the template row by row |
 | row order | the wrong answer |
 | `apply` atomicity | a corrupt store |
 | `apply` step order | a corrupt store |
@@ -37,12 +39,19 @@ rows were wanted, was specified and never produced: every `IndexRead` the
 executor built left it empty, so no engine could be shown to have got it wrong
 and no caller ever benefited. A hint nothing sends is not a hint, so it is gone.
 
-A third has been specified and is not built. An engine that can plan a read
-should be handed the `ReadPlan` rather than the flat scans it is taken apart
-into, so a count is counted where the rows are. ADR 0013 takes that decision and
-`docs/plan-pushdown.md` is the design; the table above gains a row when the
-method exists, and not before, because the rule this ADR states is that a hint
-nothing sends is not one.
+The two that survived were specified before they were built, and each took its
+row in the table when its method appeared rather than when its design did, which
+is the same rule applied forwards: a hint nothing sends is not one.
+
+`Engine::plan` hands an engine the whole `Plan` rather than the flat scans it
+would otherwise be taken apart into, so a count is counted where the rows are
+and the halves of a `Plan::Zip` can be one statement instead of two reads that
+have to be trusted to agree. `Engine::takes_sweep` is narrower on purpose: a
+sweep is offered only when the `for_each` is the whole operation, because
+expanding a template stages into the overlay a later precondition folds. Both
+default to declining, which is what keeps them hints rather than obligations.
+ADR 0013 is where the SQLite engine takes them up, and `docs/plan-pushdown.md`
+is the design.
 
 `doclite-testkit` is where this stops being a comment. `Probe` wraps any engine
 and strips every hint before forwarding, and `hints_are_hints` runs the same

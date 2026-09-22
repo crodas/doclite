@@ -325,6 +325,8 @@ cargo run -p doclite-memory --example operations   # the storage layer, no deriv
 - `docs/adr/` is why it is shaped this way.
 - `crates/doclite-testkit/src/programs.rs` is the spec's worked programs,
   running against every engine.
+- [docs/roadmap.md](docs/roadmap.md) is what is left before the first release,
+  what the one after it is for, and what is absent on purpose.
 
 ## Development
 

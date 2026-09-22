@@ -46,6 +46,9 @@ const ABSENT: &[&str] = &["begin", "by_id", "ABORT", "BEGIN", "RETURN"];
 /// Cargo's own vocabulary, which `docs/releasing.md` is entirely about.
 const CARGO: &[&str] = &["cargo", "package", "categories", "LICENSE"];
 
+/// Git's, which the roadmap needs to name a branch the source cannot contain.
+const GIT: &[&str] = &["master"];
+
 /// Where prose lives, relative to the workspace root.
 ///
 /// `docs` itself rather than only its subdirectories: the spec, the engine
@@ -376,7 +379,7 @@ fn path_tail(span: &str) -> Option<String> {
         return None;
     }
     let last = segments.last().copied().unwrap_or(bare);
-    if [BORROWED, ABSENT, CARGO]
+    if [BORROWED, ABSENT, CARGO, GIT]
         .iter()
         .any(|group| group.contains(&last))
     {
