@@ -100,7 +100,27 @@ impl Engine for SqliteEngine {
     async fn define(&self, indexes: &[IndexSchema]) -> Result<(), StorageError> {
         let indexes = indexes.to_vec();
         self.connection
-            .run(move |open| define::define(open, &indexes))
+            .run(move |open| {
+                // Initialize versioning system first
+                const CREATE_VERSION_TABLE: &str = "
+                    CREATE TABLE IF NOT EXISTS doclite_index_versions (
+                        index_name TEXT PRIMARY KEY,
+                        schema_hash TEXT NOT NULL,
+                        code_version TEXT NOT NULL,
+                        last_rebuild INTEGER,
+                        status TEXT NOT NULL DEFAULT 'ready'
+                    )
+                ";
+                
+                open.parts().0.execute_batch(CREATE_VERSION_TABLE)
+                    .map_err(crate::connection::failed)?;
+                
+                // This is a placeholder implementation showing the design concept
+                // In full implementation, this would check for schema version mismatches
+                // and trigger rebuilds when needed
+                
+                define::define(open, &indexes)
+            })
             .await
     }
 
