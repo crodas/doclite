@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 
 use crate::check::Check;
-use crate::engine::Engine;
+use crate::engine::{Defined, Engine};
 use crate::executor::answer::answer;
 use crate::executor::walk::{walk, Attempt};
 use crate::model::index::{ColumnType, IndexId, IndexSchema};
@@ -15,15 +15,23 @@ use crate::outcome::Outcome;
 use crate::query::value::FromReadValue;
 use crate::query::Query;
 
-/// A store, the indexes it was told about, and the retry loop.
+/// A store, the indexes it was told about, the retry loop, and which of those
+/// indexes the engine said it has rows missing from.
 ///
 /// This is where BEGIN and COMMIT went. There is no transaction handle to hold
 /// because [`Db::run`] is the boundary, and no rollback to call because an
 /// operation that does not commit has staged nothing.
+///
+/// What is building is reported and not acted on. Filling an index means
+/// deriving rows from objects, and an object is bytes to everything at this
+/// level, so a handle here could hold a read back forever with nothing able to
+/// release it. [`Db::building`] is the report; waiting on it belongs to the
+/// layer that can do something about it.
 pub struct Db<E> {
     engine: E,
     schemas: Vec<IndexSchema>,
     attempts: usize,
+    building: Defined,
 }
 
 /// The catalog, with an index named once.
@@ -63,11 +71,12 @@ impl<E: Engine> Db<E> {
     /// against a catalog this handle already holds.
     pub async fn open(engine: E, indexes: &[IndexSchema]) -> Result<Self, StorageError> {
         let schemas = declared(indexes)?;
-        engine.define(&schemas).await?;
+        let building = engine.define(&schemas).await?;
         Ok(Self {
             engine,
             schemas,
             attempts: 16,
+            building,
         })
     }
 
@@ -85,6 +94,23 @@ impl<E: Engine> Db<E> {
     /// The catalog as `open` settled it: deduplicated, in the order it was declared.
     pub fn schemas(&self) -> &[IndexSchema] {
         &self.schemas
+    }
+
+    /// Which indexes the engine said it has rows missing from.
+    ///
+    /// Empty for an engine that keeps nothing across a restart, because a store
+    /// built from nothing cannot be behind. A caller that can derive rows from
+    /// objects fills each one and says so with [`Db::rebuilt`]; a caller at this
+    /// level that cannot should read this rather than query an index whose rows
+    /// are not all there.
+    pub fn building(&self) -> &[IndexId] {
+        self.building.indexes()
+    }
+
+    /// Records that an index now holds every row it should, so the next open
+    /// does not fill it again.
+    pub async fn rebuilt(&self, index: IndexId) -> Result<(), StorageError> {
+        self.engine.rebuilt(index).await
     }
 
     /// Runs one operation or one query, as one transaction.

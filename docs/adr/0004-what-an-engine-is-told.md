@@ -57,6 +57,18 @@ is the design.
 and strips every hint before forwarding, and `hints_are_hints` runs the same
 script bare and probed and demands identical transcripts.
 
+## What an engine answers
+The table is about what an engine is *told*. What it *answers* is a different
+thing and is never a hint, because an engine cannot ignore its own answer.
+
+`Engine::define` answers a `Defined`, naming the indexes it has no complete set
+of rows for. Ignoring a hint widens what comes back and costs time; an engine
+that calls an index complete while its rows are missing has saved no work and
+made the next query wrong. `Engine::rebuilt` is the other half and is the same
+kind of thing. `Probe` forwards both untouched where it blanks every hint, and
+that is the line: a hint is advice the layer above re-checks, an answer is
+something only the engine knows. ADR 0015.
+
 ## Consequences
 The executor filters what comes back on every path. `KeyRange::select` is that
 line, and removing it is caught by the probed run rather than by review.

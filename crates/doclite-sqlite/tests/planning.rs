@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use doclite_core::{
-    all, exact, key, Answers, Applied, Batch, Db, Engine, Index, IndexSchema, ObjectId, Operation,
-    Outcome, Plan, Query, ReadValue, Reads, StorageError,
+    all, exact, key, Answers, Applied, Batch, Db, Defined, Engine, Index, IndexSchema, ObjectId,
+    Operation, Outcome, Plan, Query, ReadValue, Reads, StorageError,
 };
 use doclite_sqlite::SqliteEngine;
 
@@ -40,7 +40,7 @@ impl<E> Counted<E> {
 
 #[async_trait]
 impl<E: Engine> Engine for Counted<E> {
-    async fn define(&self, indexes: &[IndexSchema]) -> Result<(), StorageError> {
+    async fn define(&self, indexes: &[IndexSchema]) -> Result<Defined, StorageError> {
         self.inner.define(indexes).await
     }
 
@@ -63,7 +63,7 @@ struct Flat<E>(Counted<E>);
 
 #[async_trait]
 impl<E: Engine> Engine for Flat<E> {
-    async fn define(&self, indexes: &[IndexSchema]) -> Result<(), StorageError> {
+    async fn define(&self, indexes: &[IndexSchema]) -> Result<Defined, StorageError> {
         self.0.define(indexes).await
     }
 

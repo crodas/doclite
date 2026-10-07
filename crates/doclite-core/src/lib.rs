@@ -60,8 +60,8 @@ mod query;
 
 pub use crate::db::{Db, Runnable};
 pub use crate::engine::{
-    Answers, Applied, Assertion, Batch, Engine, IndexEntry, IndexRead, KeyRange, Observed, Plan,
-    RangeDelete, Reads, Sweep,
+    Answers, Applied, Assertion, Batch, Defined, Engine, IndexEntry, IndexRead, KeyRange, Observed,
+    Plan, RangeDelete, Reads, Sweep,
 };
 pub use crate::model::column::{Column, IntoColumn, IntoObject};
 pub use crate::model::encoding::ToOrdBytes;

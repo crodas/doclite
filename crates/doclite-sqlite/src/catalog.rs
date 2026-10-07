@@ -68,6 +68,11 @@ impl Layout {
         &self.table
     }
 
+    /// The same name unquoted, which is how `sqlite_master` holds it.
+    pub(crate) fn name(&self) -> String {
+        format!("{INDEX_PREFIX}{}", self.id.0)
+    }
+
     /// What holds each column, in key order.
     pub(crate) fn columns(&self) -> &[Storage] {
         &self.columns
@@ -343,9 +348,10 @@ impl Catalog {
     /// Declares an index, or refuses a second declaration that disagrees.
     ///
     /// `define` runs on every open, so declaring the same index again is
-    /// ordinary. Declaring it differently is not: the table already exists and
-    /// `CREATE TABLE IF NOT EXISTS` would leave it alone, so the disagreement
-    /// would only surface later as an arity the caller never wrote.
+    /// ordinary. Declaring it differently within one call is not: there is no
+    /// earlier state to reconcile and nothing says which of the two was meant.
+    /// A shape that moved since the last run is a different question, and
+    /// `version.rs` answers it by rebuilding the index rather than refusing.
     pub(crate) fn declare(&mut self, schema: &IndexSchema) -> Result<&Layout, StorageError> {
         let columns: Vec<Storage> = schema.columns.iter().map(Storage::of).collect();
         let held = self
@@ -364,13 +370,18 @@ impl Catalog {
     }
 }
 
-/// What moved between two declarations of one index.
+/// What moved between two declarations of one index, within one `define` call.
+///
+/// This is not about a shape that moved between two runs, which `version.rs`
+/// settles by rebuilding the index. It is about one call declaring one index two
+/// ways, where there is no earlier state to reconcile and no way to tell which
+/// of the two the caller meant.
 ///
 /// The width and a column's storage are two different mistakes, so they are two
 /// different sentences. Reporting the width for both is how this said "two
 /// columns and is now two" and told nobody anything.
 fn changed(index: IndexId, held: &[Storage], now: &[Storage]) -> StorageError {
-    let migration = "changing an index is a migration rather than a definition";
+    let migration = "one call cannot declare one index two ways";
 
     if held.len() != now.len() {
         return StorageError::Engine(format!(

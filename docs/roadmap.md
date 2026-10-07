@@ -80,6 +80,11 @@ Writing one is the cheapest way to find out whether `Store` and `Region` are the
 right size, and the conformance suite means the new backend arrives with its
 correctness argument already written.
 
+`Store::define` answers a `Defined`, so a store that keeps its rows has
+somewhere to say which indexes it has no complete set of them for. The in-process
+map answers `Defined::ready` truthfully because nothing it holds outlives the
+process; a persistent one is the first that will have to mean it.
+
 ### Decide `#[non_exhaustive]` before 1.0
 
 No public enum carries it, including the error enums. Before 1.0 that is

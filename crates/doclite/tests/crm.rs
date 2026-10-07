@@ -13,7 +13,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use doclite_core::{
-    Answers, Applied, Batch, Engine, IndexSchema, ObjectId, Reads, StorageError, ToOrdBytes,
+    Answers, Applied, Batch, Defined, Engine, IndexSchema, ObjectId, Reads, StorageError,
+    ToOrdBytes,
 };
 use serde::{Deserialize, Serialize};
 
@@ -598,7 +599,7 @@ impl<E> Counted<E> {
 
 #[async_trait]
 impl<E: Engine> Engine for Counted<E> {
-    async fn define(&self, indexes: &[IndexSchema]) -> Result<(), StorageError> {
+    async fn define(&self, indexes: &[IndexSchema]) -> Result<Defined, StorageError> {
         self.inner.define(indexes).await
     }
 

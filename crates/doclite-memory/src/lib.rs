@@ -41,7 +41,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{RwLock, RwLockWriteGuard};
 
-use doclite_core::{Answers, IndexId, IndexSchema, KeyRange, ObjectId, Reads, Row, StorageError};
+use doclite_core::{
+    Answers, Defined, IndexId, IndexSchema, KeyRange, ObjectId, Reads, Row, StorageError,
+};
 use doclite_store::{Region, Store, StoreEngine};
 
 /// Objects and indexes in memory, for a process that wants no file.
@@ -92,13 +94,17 @@ impl State {
 impl Store for MemoryStore {
     type Region<'a> = Held<'a>;
 
-    fn define(&self, indexes: &[IndexSchema]) -> Result<(), StorageError> {
+    /// Nothing here outlives the process, so every index just declared is as
+    /// complete as the store it sits in. [`Defined::ready`] is the truth rather
+    /// than a convenient default: there is no earlier run for these rows to be
+    /// behind.
+    fn define(&self, indexes: &[IndexSchema]) -> Result<Defined, StorageError> {
         let mut state = self.state.write().map_err(|_| StorageError::Poisoned)?;
         for schema in indexes {
             state.schemas.insert(schema.id, schema.arity());
             state.indexes.entry(schema.id).or_default();
         }
-        Ok(())
+        Ok(Defined::ready())
     }
 
     fn read(&self, reads: &Reads<'_>) -> Result<Answers, StorageError> {

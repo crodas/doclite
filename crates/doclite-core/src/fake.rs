@@ -10,7 +10,7 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 
-use crate::engine::{Answers, Applied, Batch, Engine, Plan, Reads, Sweep};
+use crate::engine::{Answers, Applied, Batch, Defined, Engine, Plan, Reads, Sweep};
 use crate::model::index::{IndexId, IndexSchema};
 use crate::model::row::Row;
 use crate::outcome::error::StorageError;
@@ -67,8 +67,8 @@ impl Fake {
 
 #[async_trait]
 impl Engine for Fake {
-    async fn define(&self, _indexes: &[IndexSchema]) -> Result<(), StorageError> {
-        Ok(())
+    async fn define(&self, _indexes: &[IndexSchema]) -> Result<Defined, StorageError> {
+        Ok(Defined::ready())
     }
 
     async fn read(&self, reads: &Reads<'_>) -> Result<Answers, StorageError> {

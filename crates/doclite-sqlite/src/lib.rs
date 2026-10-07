@@ -19,5 +19,6 @@ mod read;
 mod statement;
 mod storage;
 mod sweep;
+mod version;
 
 pub use crate::engine::{Durability, SqliteEngine};

@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use doclite::doclite_core::{
-    all, Answers, Applied, Batch, Engine, IndexSchema, Query, Reads, StorageError,
+    all, Answers, Applied, Batch, Defined, Engine, IndexSchema, Query, Reads, StorageError,
 };
 use doclite::id::EPOCH_MS;
 use doclite::{
@@ -359,7 +359,7 @@ impl<E> Balk<E> {
 
 #[async_trait]
 impl<E: Engine> Engine for Balk<E> {
-    async fn define(&self, indexes: &[IndexSchema]) -> Result<(), StorageError> {
+    async fn define(&self, indexes: &[IndexSchema]) -> Result<Defined, StorageError> {
         self.inner.define(indexes).await
     }
 

@@ -105,6 +105,8 @@ macro_rules! conformance {
                 a_for_each_under_its_limit_still_commits,
                 a_for_each_whose_scan_names_no_row_writes_nothing,
                 a_catalog_that_names_an_index_twice_is_refused,
+                a_fresh_engine_owes_no_rows,
+                an_index_reported_rebuilt_is_accepted,
             ],
         }
     };

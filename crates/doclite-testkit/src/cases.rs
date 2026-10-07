@@ -19,8 +19,51 @@ use crate::fresh::Fresh;
 /// all of them rather than one list per shape.
 async fn open<F: Fresh>() -> Result<F::Engine, Failure> {
     let engine = F::fresh().await?;
-    engine.define(&schemas()).await?;
+    let building = engine.define(&schemas()).await?;
+    expect(
+        building.is_ready(),
+        format!(
+            "a fresh engine owes no index any rows, and this one named {:?}",
+            building.indexes()
+        ),
+    )?;
     Ok(engine)
+}
+
+/// A fresh engine says every index it was just told about is complete.
+///
+/// What `define` answers is not a hint: an engine that calls an index complete
+/// while its rows are missing has not saved work, it has made the next query
+/// wrong. A store built from nothing cannot be behind what was declared, so the
+/// only honest answer here is that nothing is outstanding. An engine that keeps
+/// nothing across a restart answers this way always.
+pub async fn a_fresh_engine_owes_no_rows<F: Fresh>() -> Result<(), Failure> {
+    let engine = F::fresh().await?;
+    let building = engine.define(&schemas()).await?;
+
+    expect(
+        building.is_ready(),
+        format!(
+            "a store with nothing in it owes nothing, and this one named {:?}",
+            building.indexes()
+        ),
+    )?;
+    expect(
+        !building.is_building(BY_EMAIL.id()),
+        "an index just declared on an empty store holds every row it should",
+    )
+}
+
+/// Saying an index is filled is accepted, and saying it of one nobody declared
+/// is named rather than ignored.
+///
+/// Defaulted to doing nothing for an engine that keeps no state, which is why
+/// the first half asserts only that it is not an error.
+pub async fn an_index_reported_rebuilt_is_accepted<F: Fresh>() -> Result<(), Failure> {
+    let engine = &open::<F>().await?;
+    engine.rebuilt(BY_EMAIL.id()).await?;
+    engine.rebuilt(BY_EMAIL.id()).await?;
+    Ok(())
 }
 
 /// A scan answers in the index's own order: columns, then object id.

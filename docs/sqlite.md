@@ -242,18 +242,58 @@ ids are the columns where that reads worst, which is what ADR 0014 is about.
 
 ## `define`
 
-The two object tables and a `CREATE TABLE IF NOT EXISTS` per index, all in one
-transaction.
+The two object tables, a `CREATE TABLE IF NOT EXISTS` per index, and a row per
+index in `doclite_index` recording the shape that table was built for, all in
+one transaction. It answers a `Defined` naming the indexes whose rows are not
+all there.
 
 It is called on every `Db::open` with the whole index list, so it must tolerate
-repetition. It must not create a `UNIQUE` index, and it must not drop or alter a
-table it did not expect: an index whose arity has changed is a migration, not a
-definition, and silently rewriting it would lose rows.
+repetition, and it must not create a `UNIQUE` index.
+
+What it does with a declaration depends on what the last run left behind. Five
+cases, and which one it is decides whether anything has to be scanned:
+
+| recorded shape | table | store | answer |
+|---|---|---|---|
+| none | none | no objects | complete |
+| none | none | holds objects | being filled |
+| none | there | | complete |
+| same | | | whatever was recorded |
+| moved | | | dropped, rebuilt, being filled |
+
+The third row is the upgrade. A database written before any of this existed has
+its index tables and no record of them, and every write that touched one kept it
+in step, so those tables are complete and saying so is the truth rather than
+optimism. It is why `define` asks `sqlite_master` whether the table is there and
+not only whether a row describes it.
+
+The fourth keeps whatever was recorded, so a fill that was interrupted carries
+on rather than being forgotten. The fifth is the one the old policy refused:
+every row in that table is keyed on bytes nothing will look for again, so the
+table goes and the `CREATE` that follows builds it afresh. ADR 0015 is why
+rebuilding is now the answer and ADR 0001 is why it is safe.
+
+The recorded shape is the `Storage` of each column rather than the `ColumnType`
+the caller declared, because `Storage` is exactly what decides the bytes a key
+is held as. `Bool` and `U8` are both one unsigned byte, so swapping one for the
+other needs no scan; `U8` for `U32` changes the width and does.
+
+Whether the store holds any object at all is asked once per call and not once
+per index. It is the difference between a fresh store, where a declaration
+nobody has seen is complete the moment its table exists, and a store with
+history, where the same declaration has every object already filed to catch up
+on.
 
 An engine keeps its own map from `IndexId` to table name. It cannot rebuild an
 `IndexId` from the database, because `IndexId` is a `&'static str` and no string
-read at runtime can become one. Names come from `define`; the database is only
-asked whether a table exists.
+read at runtime can become one. Names come from `define`, and what is read back
+is only ever compared against them.
+
+## `rebuilt`
+
+One `UPDATE` saying an index now holds every row it should, so the next open
+does not scan it again. Filling it is not this crate's: an object is bytes here,
+and a row is derived by walking `Record::rows`.
 
 ## `read`
 

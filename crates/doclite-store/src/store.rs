@@ -1,6 +1,8 @@
 //! What a store keeps, and the one region a batch is decided in.
 
-use doclite_core::{Answers, IndexId, IndexSchema, KeyRange, ObjectId, Reads, Row, StorageError};
+use doclite_core::{
+    Answers, Defined, IndexId, IndexSchema, KeyRange, ObjectId, Reads, Row, StorageError,
+};
 
 /// Somewhere ordered rows and objects live.
 ///
@@ -19,9 +21,16 @@ pub trait Store: Send + Sync {
     where
         Self: 'a;
 
-    /// Declares one home per index. Called again with the same indexes on every
-    /// open, so it has to tolerate repetition.
-    fn define(&self, indexes: &[IndexSchema]) -> Result<(), StorageError>;
+    /// Declares one home per index, and says which of them has rows missing.
+    ///
+    /// Called again with the same indexes on every open, so it has to tolerate
+    /// repetition. A store that keeps nothing across a restart answers
+    /// [`Defined::ready`], because a store built from nothing cannot be behind
+    /// what was declared. A store that does keep its rows, which is every one
+    /// ADR 0011 names as the reason this seam exists, is the only place a
+    /// previous run's shape was written down, so it is the only place that can
+    /// notice a declaration it has no complete set of rows for.
+    fn define(&self, indexes: &[IndexSchema]) -> Result<Defined, StorageError>;
 
     /// Answers every scan and every object from one consistent view.
     ///

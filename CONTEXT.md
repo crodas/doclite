@@ -92,7 +92,9 @@ There are two ways, and a backend picks the one that matches what it has. ADR
 
 **Engine.** The full seam: define, read, apply a whole batch. Everything about
 what a batch means is the implementer's, which is what lets a store with a query
-language of its own answer in a statement. SQLite and Postgres go here.
+language of its own answer in a statement. SQLite and Postgres go here. It also
+answers what it had to build, which is not a hint in ADR 0004's sense: an
+engine cannot ignore its own answer.
 
 **Store.** The narrow seam, for a substrate that keeps ordered rows and nothing
 more. Define an index, answer reads, and hand out a **Region**. `StoreEngine`

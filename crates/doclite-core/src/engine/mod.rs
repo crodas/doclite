@@ -35,6 +35,7 @@
 
 mod assertion;
 mod batch;
+mod defined;
 mod key_range;
 mod plan;
 mod read;
@@ -44,23 +45,44 @@ use async_trait::async_trait;
 
 pub use assertion::{Assertion, Observed};
 pub use batch::{Applied, Batch, IndexEntry, RangeDelete};
+pub use defined::Defined;
 pub use key_range::KeyRange;
 pub use plan::Plan;
 pub use read::{Answers, IndexRead, Reads};
 pub use sweep::Sweep;
 
-use crate::model::index::IndexSchema;
+use crate::model::index::{IndexId, IndexSchema};
 use crate::outcome::error::StorageError;
 use crate::query::value::ReadValue;
 
 /// Where objects live and what indexes name them.
 #[async_trait]
 pub trait Engine: Send + Sync {
-    /// Declares one home per index.
+    /// Declares one home per index, and says which of them cannot be trusted
+    /// yet.
     ///
     /// No index carries a constraint. Whether at most one object may hold a
     /// key is a rule, and rules are asserted rather than declared.
-    async fn define(&self, indexes: &[IndexSchema]) -> Result<(), StorageError>;
+    ///
+    /// Called with the whole catalog on every open, so an engine that keeps its
+    /// indexes is the one place a declaration can be compared against what was
+    /// stored for it last time. An index this engine has no rows for, or rows
+    /// in a shape the declaration no longer matches, is named in the
+    /// [`Defined`] that comes back, and the layer above fills it before letting
+    /// a read through. An engine that keeps nothing answers
+    /// [`Defined::ready`].
+    async fn define(&self, indexes: &[IndexSchema]) -> Result<Defined, StorageError>;
+
+    /// Records that an index named by [`Engine::define`] now holds every row
+    /// it should, so a later open does not fill it again.
+    ///
+    /// Defaulted to doing nothing, which is correct rather than lenient: an
+    /// engine that never reported an index as building is never told one
+    /// finished.
+    async fn rebuilt(&self, index: IndexId) -> Result<(), StorageError> {
+        let _ = index;
+        Ok(())
+    }
 
     /// Answers every scan and every object from one consistent view.
     ///

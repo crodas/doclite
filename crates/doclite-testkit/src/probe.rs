@@ -4,11 +4,17 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use doclite_core::{
-    Answers, Applied, Batch, Engine, IndexRead, IndexSchema, KeyRange, Plan, ReadValue, Reads,
-    StorageError, Sweep,
+    Answers, Applied, Batch, Defined, Engine, IndexId, IndexRead, IndexSchema, KeyRange, Plan,
+    ReadValue, Reads, StorageError, Sweep,
 };
 
 /// Wraps an engine and blanks every hint before forwarding.
+///
+/// `define` and `rebuilt` are the two methods it forwards untouched. The hints
+/// are about what an engine is *told*, and blanking one only ever widens what
+/// comes back; what `define` answers is what the engine *holds*, and blanking
+/// that would make the engine lie about an index whose rows are missing. See
+/// ADR 0004.
 ///
 /// The range becomes "everything" and the limit goes. An engine wrapped in this
 /// must still produce the same answers through the executor, because filtering
@@ -37,8 +43,15 @@ impl<E> Probe<E> {
 
 #[async_trait]
 impl<E: Engine> Engine for Probe<E> {
-    async fn define(&self, indexes: &[IndexSchema]) -> Result<(), StorageError> {
+    /// Forwarded whole, because what `define` reports is not a hint: an engine
+    /// that claims an index is complete when its rows are missing answers a
+    /// query wrongly rather than slowly, so there is nothing here to strip.
+    async fn define(&self, indexes: &[IndexSchema]) -> Result<Defined, StorageError> {
         self.inner.define(indexes).await
+    }
+
+    async fn rebuilt(&self, index: IndexId) -> Result<(), StorageError> {
+        self.inner.rebuilt(index).await
     }
 
     async fn read(&self, reads: &Reads<'_>) -> Result<Answers, StorageError> {

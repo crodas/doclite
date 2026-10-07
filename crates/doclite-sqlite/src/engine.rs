@@ -2,10 +2,12 @@
 
 use async_trait::async_trait;
 use doclite_core::{
-    Answers, Applied, Batch, Engine, IndexSchema, Plan, ReadValue, Reads, StorageError, Sweep,
+    Answers, Applied, Batch, Defined, Engine, IndexId, IndexSchema, Plan, ReadValue, Reads,
+    StorageError, Sweep,
 };
 
-use crate::connection::Connection;
+use crate::connection::{failed, Connection};
+use crate::version::INDEXES;
 use crate::{apply, define, plan, read, sweep};
 
 /// Objects and indexes in SQLite, for a process that wants them to survive it.
@@ -97,29 +99,28 @@ impl SqliteEngine {
 
 #[async_trait]
 impl Engine for SqliteEngine {
-    async fn define(&self, indexes: &[IndexSchema]) -> Result<(), StorageError> {
+    /// Also says which indexes have rows missing, which is the one thing a
+    /// durable engine can answer and an in-process one never has to: the
+    /// declaration is the same every open, so the store is the only place a
+    /// previous run's shape was written down.
+    async fn define(&self, indexes: &[IndexSchema]) -> Result<Defined, StorageError> {
         let indexes = indexes.to_vec();
         self.connection
+            .run(move |open| define::define(open, &indexes))
+            .await
+    }
+
+    /// Recorded rather than forgotten, so the next open does not scan an index
+    /// that is already complete.
+    async fn rebuilt(&self, index: IndexId) -> Result<(), StorageError> {
+        self.connection
             .run(move |open| {
-                // Initialize versioning system first
-                const CREATE_VERSION_TABLE: &str = "
-                    CREATE TABLE IF NOT EXISTS doclite_index_versions (
-                        index_name TEXT PRIMARY KEY,
-                        schema_hash TEXT NOT NULL,
-                        code_version TEXT NOT NULL,
-                        last_rebuild INTEGER,
-                        status TEXT NOT NULL DEFAULT 'ready'
-                    )
-                ";
-                
-                open.parts().0.execute_batch(CREATE_VERSION_TABLE)
-                    .map_err(crate::connection::failed)?;
-                
-                // This is a placeholder implementation showing the design concept
-                // In full implementation, this would check for schema version mismatches
-                // and trigger rebuilds when needed
-                
-                define::define(open, &indexes)
+                let (db, _catalog) = open.parts();
+                db.prepare_cached(&format!("UPDATE {INDEXES} SET filled = 1 WHERE name = ?1"))
+                    .map_err(failed)?
+                    .execute([index.0])
+                    .map_err(failed)?;
+                Ok(())
             })
             .await
     }

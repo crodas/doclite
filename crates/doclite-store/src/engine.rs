@@ -1,7 +1,7 @@
 //! The adapter: a store, wearing the engine seam.
 
 use async_trait::async_trait;
-use doclite_core::{Answers, Applied, Batch, Engine, IndexSchema, Reads, StorageError};
+use doclite_core::{Answers, Applied, Batch, Defined, Engine, IndexSchema, Reads, StorageError};
 
 use crate::admit::Admission;
 use crate::store::Store;
@@ -46,7 +46,7 @@ impl<S: Default> Default for StoreEngine<S> {
 
 #[async_trait]
 impl<S: Store> Engine for StoreEngine<S> {
-    async fn define(&self, indexes: &[IndexSchema]) -> Result<(), StorageError> {
+    async fn define(&self, indexes: &[IndexSchema]) -> Result<Defined, StorageError> {
         self.0.define(indexes)
     }
 

@@ -7,9 +7,10 @@
 //! tolerates repetition. What it does not tolerate is a second declaration that
 //! disagrees, which `Catalog::declare` refuses.
 
-use doclite_core::{IndexSchema, StorageError};
+use doclite_core::{Defined, IndexId, IndexSchema, StorageError};
 
 use crate::connection::{failed, Open};
+use crate::version::{self, State};
 
 /// Objects are inserted and never rewritten, so these tables are only ever
 /// appended to and a primary-key conflict is how that rule is enforced within
@@ -26,15 +27,39 @@ const DOCUMENT_TABLES: &str = "\
     CREATE TABLE IF NOT EXISTS doclite_json_document (\
       id INTEGER PRIMARY KEY, body TEXT NOT NULL) WITHOUT ROWID;";
 
-pub(crate) fn define(open: &mut Open, indexes: &[IndexSchema]) -> Result<(), StorageError> {
+/// Declares every index, and says which of them has rows missing.
+///
+/// The record of each table's shape lives in the same transaction as the table,
+/// so a shape and the table it describes are committed together or not at all.
+/// `version::settle` runs before the `CREATE TABLE`, because a shape that moved
+/// drops the old table and the create that follows is what builds the new one.
+pub(crate) fn define(open: &mut Open, indexes: &[IndexSchema]) -> Result<Defined, StorageError> {
     let (db, catalog) = open.parts();
     let transaction = db.transaction().map_err(failed)?;
 
     transaction.execute_batch(DOCUMENT_TABLES).map_err(failed)?;
+    version::declare(&transaction)?;
+    let holds_objects = version::holds_objects(&transaction)?;
+
+    let mut building: Vec<IndexId> = Vec::new();
     for schema in indexes {
-        let table = catalog.declare(schema)?.create_table();
-        transaction.execute_batch(&table).map_err(failed)?;
+        let layout = catalog.declare(schema)?;
+        let state = version::settle(
+            &transaction,
+            schema.id,
+            layout.columns(),
+            layout.table(),
+            &layout.name(),
+            holds_objects,
+        )?;
+        transaction
+            .execute_batch(&layout.create_table())
+            .map_err(failed)?;
+        if state == State::Building {
+            building.push(schema.id);
+        }
     }
 
-    transaction.commit().map_err(failed)
+    transaction.commit().map_err(failed)?;
+    Ok(Defined::building(building))
 }

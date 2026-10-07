@@ -7,6 +7,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Before 1.0 a minor bump is where a breaking change goes.
 
+## Unreleased
+
+### Added
+
+- **An engine says which of its indexes have rows missing.** A new or reshaped
+  index used to get an empty table, so a query through it answered
+  correctly-shaped nothing. `Engine::define` now answers a `Defined` naming the
+  indexes it has no complete set of rows for, `Engine::rebuilt` records that one
+  is complete, and `doclite-sqlite` keeps the shape each index table was built
+  for in `doclite_index`.
+
+### Changed
+
+- **`Engine::define` and `Store::define` answer a `Defined` rather than
+  nothing.** Breaking for anyone implementing either seam. A backend that keeps
+  nothing across a restart answers `Defined::ready`.
+- **An index whose shape moved is dropped rather than refused.** `docs/sqlite.md`
+  said an arity change was a migration and not a definition. ADR 0015 reverses
+  that, and ADR 0001 is why it is safe. An existing database is not rebuilt on
+  first open: an index table with no recorded shape is taken as complete.
+
 ## 0.1.0 - 2026-09-05
 
 First release, so there is no upgrade path to describe. The date is the day the
