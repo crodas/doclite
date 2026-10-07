@@ -6,7 +6,7 @@
 //! and knows nothing about any of it.
 //!
 //! ```
-//! use doclite::{Column, Connection, Document, DocumentError, Record};
+//! use doclite::{Column, Connection, Document, DocumentError, Record, records};
 //! use doclite_memory::MemoryEngine;
 //! use serde::{Deserialize, Serialize};
 //!
@@ -24,7 +24,7 @@
 //! }
 //!
 //! # async fn example() -> Result<(), DocumentError> {
-//! let conn = Connection::open(MemoryEngine::new(), &User::schemas()).await?;
+//! let conn = Connection::open(MemoryEngine::new(), records![User]).await?;
 //!
 //! let first = conn
 //!     .insert(User {
@@ -73,7 +73,7 @@
 //! `'$.prev'` reads the revision this one superseded.
 //!
 //! ```
-//! use doclite::{Connection, Document, DocumentError, Record};
+//! use doclite::{Connection, Document, DocumentError, Record, records};
 //! use doclite_memory::MemoryEngine;
 //! use serde::{Deserialize, Serialize};
 //!
@@ -86,7 +86,7 @@
 //! }
 //!
 //! # async fn example() -> Result<(), DocumentError> {
-//! let conn = Connection::open(MemoryEngine::new(), &Note::schemas()).await?;
+//! let conn = Connection::open(MemoryEngine::new(), records![Note]).await?;
 //! let note = conn
 //!     .insert(Note {
 //!         slug: "n-1".into(),
@@ -133,11 +133,15 @@ pub mod bounds;
 pub mod clock;
 pub mod connection;
 pub mod error;
+mod gate;
 pub mod id;
 pub mod identity;
 pub mod query;
+pub mod rebuild;
 pub mod record;
+pub mod records;
 pub mod revision;
+pub mod spawn;
 pub mod transaction;
 mod write;
 
@@ -148,6 +152,8 @@ pub use crate::error::DocumentError;
 pub use crate::id::{IdError, IdSource, NodeId, Snowflake};
 pub use crate::identity::{DocumentId, Ref, RevisionId};
 pub use crate::query::{scan_between, scan_prefix, scan_within, Selection};
-pub use crate::record::{Amendable, Record, Rows};
+pub use crate::record::{Amendable, Only, Record, Rows};
+pub use crate::records::Records;
 pub use crate::revision::{Revision, Stored};
+pub use crate::spawn::Spawner;
 pub use crate::transaction::Transaction;

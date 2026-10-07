@@ -11,19 +11,34 @@ Before 1.0 a minor bump is where a breaking change goes.
 
 ### Added
 
-- **An engine says which of its indexes have rows missing.** A new or reshaped
-  index used to get an empty table, so a query through it answered
+- **An index whose rows are missing is filled before it is read.** A new or
+  reshaped index used to get an empty table, so a query through it answered
   correctly-shaped nothing. `Engine::define` now answers a `Defined` naming the
   indexes it has no complete set of rows for, `Engine::rebuilt` records that one
   is complete, and `doclite-sqlite` keeps the shape each index table was built
   for in `doclite_index`.
+- **A connection is opened over record types.** `records![User, Note]` replaces
+  concatenating `User::schemas()` and `Note::schemas()` by hand, and is what
+  gives a rebuild a type to walk. `Connection::over` still takes schemas and
+  refuses to open when something needs filling, because it has nothing that
+  could fill it.
+- **`Connection::spawning` and the `Spawner` trait.** A rebuild off the critical
+  path, on a runtime the caller supplies. `Connection::open` waits for it
+  instead, which needs no spawner and no gate.
+- **Reads of an index that is still being filled wait for it.** Only reads, and
+  only of that index: filing a row into one is safe, and a precondition is a
+  read. `Operation::reads`, `ReadPlan::reads` and `Query::reads` are where that
+  line is drawn.
 
 ### Changed
 
 - **`Engine::define` and `Store::define` answer a `Defined` rather than
   nothing.** Breaking for anyone implementing either seam. A backend that keeps
   nothing across a restart answers `Defined::ready`.
-- **An index whose shape moved is dropped rather than refused.** `docs/sqlite.md`
+- **`Connection::open` takes `Records` rather than `&[IndexSchema]`.** Breaking.
+  `records![T]` is the replacement at a call site, and `Connection::over` is the
+  schemas-only door.
+- **An index whose shape moved is rebuilt rather than refused.** `docs/sqlite.md`
   said an arity change was a migration and not a definition. ADR 0015 reverses
   that, and ADR 0001 is why it is safe. An existing database is not rebuilt on
   first open: an index table with no recorded shape is taken as complete.

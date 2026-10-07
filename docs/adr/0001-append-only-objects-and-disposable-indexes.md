@@ -27,7 +27,16 @@ new ones, written out in order, which is spec section 4.2 and not a special
 operation.
 
 An index can be rebuilt from the objects it names, which is why losing one is
-recoverable and losing an object is not.
+recoverable and losing an object is not. ADR 0015 is where that is cashed in:
+an index whose rows are missing is filled rather than refused. The filling lives
+above this crate, because deriving a row from an object means walking
+`Record::rows` and an object is bytes here.
+
+An index carrying no constraint has a cost that only shows up there. A
+`#[unique]` index declared over data already holding two of a key cannot be
+filled, because nothing ever stopped the second one being written. The fill
+claims each key it files, so that is a refusal naming the index rather than two
+rows nothing can tell apart.
 
 Nothing in this crate ever frees the space an object occupies. A layer above
 that wants retirement models it as an ordinary indexed field, because a

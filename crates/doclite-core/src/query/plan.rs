@@ -51,3 +51,35 @@ pub enum ReadPlan {
     /// they can be trusted to agree.
     Zip(Box<ReadPlan>, Box<ReadPlan>),
 }
+
+impl ReadPlan {
+    /// Every index this read looks in.
+    ///
+    /// What it is for is an index whose rows are not all there yet: a read
+    /// through one would answer out of a table with rows missing, which is
+    /// wrong rather than slow, so a caller that knows an index is still being
+    /// filled waits on exactly the reads that name it.
+    pub fn reads(&self) -> Vec<IndexId> {
+        let mut named = Vec::new();
+        self.gather(&mut named);
+        named
+    }
+
+    fn gather(&self, into: &mut Vec<IndexId>) {
+        match self {
+            Self::Object { .. } => {}
+            Self::Count { index, .. } | Self::Scan { index, .. } => named_once(*index, into),
+            Self::Zip(left, right) => {
+                left.gather(into);
+                right.gather(into);
+            }
+        }
+    }
+}
+
+/// Named once, because a read that looks in one index twice waits for it once.
+pub(crate) fn named_once(index: IndexId, into: &mut Vec<IndexId>) {
+    if !into.contains(&index) {
+        into.push(index);
+    }
+}

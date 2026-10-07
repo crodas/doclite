@@ -5,8 +5,9 @@
 //! cargo run -p doclite --example crm
 //! ```
 
-use doclite::{greater_than, Column, Connection, Document, DocumentError, Record, Ref, Stored};
-use doclite_core::IndexSchema;
+use doclite::{
+    greater_than, records, Column, Connection, Document, DocumentError, Records, Ref, Stored,
+};
 use doclite_memory::MemoryEngine;
 use serde::{Deserialize, Serialize};
 
@@ -74,10 +75,8 @@ struct Deal {
     amount_cents: i64,
 }
 
-fn schemas() -> Vec<IndexSchema> {
-    let mut all = Account::schemas();
-    all.extend(Deal::schemas());
-    all
+fn catalog() -> Records {
+    records![Account, Deal]
 }
 
 /// Derived `Debug` ignores a width, so a column of stages has to be a string
@@ -177,7 +176,7 @@ async fn seed(
 
 #[tokio::main]
 async fn main() -> Result<(), DocumentError> {
-    let conn = Connection::open(MemoryEngine::new(), &schemas()).await?;
+    let conn = Connection::open(MemoryEngine::new(), catalog()).await?;
     let (roma, _sur) = seed(&conn).await?;
 
     println!("Ana's book");

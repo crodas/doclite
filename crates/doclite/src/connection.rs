@@ -1,16 +1,40 @@
 //! A handle that files records, finds them, and supersedes them.
 
-use doclite_core::{key, Bound, Db, Engine, IndexSchema, Outcome, Query, Row};
+use std::sync::Arc;
+
+use doclite_core::{
+    key, Bound, Db, Engine, FromReadValue, IndexId, IndexSchema, Operation, Outcome, Query, Row,
+    Runnable,
+};
 
 use crate::clock::{Clock, SystemClock};
 use crate::error::DocumentError;
+use crate::gate::{Building, Gate};
 use crate::id::{minted_at, IdError, IdSource, NodeId, Snowflake};
 use crate::identity::{DocumentId, Ref, RevisionId};
 use crate::query::{scan_between, scan_prefix};
+use crate::rebuild;
 use crate::record::{Amendable, Codes, Record, CODE_BASE};
+use crate::records::Records;
 use crate::revision::{Revision, Stored};
+use crate::spawn::Spawner;
 use crate::transaction::Transaction;
 use crate::write;
+
+/// The store and the read gate, which a rebuild running elsewhere also holds.
+///
+/// Behind one [`Arc`] because a rebuild handed to a [`Spawner`] outlives the
+/// `open` call that started it, and `Db` is not cloneable: `SqliteEngine` owns
+/// a thread, and two handles to one engine is not the same thing as two
+/// engines.
+///
+/// The mint is deliberately not in here. A rebuild files rows pointing at
+/// revisions that already exist, so it mints nothing, and keeping the clock
+/// out means the `'static` a spawned task needs does not spread to `C`.
+pub(crate) struct Shared<E> {
+    pub(crate) db: Db<E>,
+    pub(crate) gate: Arc<Gate>,
+}
 
 /// A store and the mint that names what goes into it.
 ///
@@ -20,16 +44,61 @@ use crate::write;
 /// different milliseconds, so a revision could carry a timestamp its own id
 /// disagreed with. The timestamp is read back out of the id instead.
 pub struct Connection<E, C = SystemClock> {
-    db: Db<E>,
+    shared: Arc<Shared<E>>,
     ids: Snowflake<C>,
 }
 
 impl<E: Engine> Connection<E, SystemClock> {
-    /// Opens against the system clock and a node id nothing has to configure.
+    /// Opens over the record types this connection files and finds.
     ///
-    /// See [`NodeId::derived`] for what that node id is and when to pin it.
-    pub async fn open(engine: E, schemas: &[IndexSchema]) -> Result<Self, DocumentError> {
-        Self::with_clock(engine, schemas, SystemClock, NodeId::derived()).await
+    /// The types rather than their schemas, because an index whose rows are
+    /// missing is filled by decoding objects and walking
+    /// [`Record::rows`], and a schema has forgotten which
+    /// type it came from. `records![User, Note]` builds the argument.
+    ///
+    /// Any index the engine reports as missing rows is filled before this
+    /// returns. That costs the open one scan of the affected types and needs no
+    /// gate at all, which is why it is the default; [`Connection::spawning`] is
+    /// for a caller who would rather not wait.
+    pub async fn open(engine: E, records: Records) -> Result<Self, DocumentError> {
+        Self::with_clock(engine, records, SystemClock, NodeId::derived()).await
+    }
+
+    /// Opens without waiting for an index to be filled, running the rebuild on
+    /// a spawner of the caller's choosing.
+    ///
+    /// Returns as soon as the indexes are declared. A read that names one whose
+    /// rows are still missing parks until that index is filled, and a spawner
+    /// that drops the work instead of running it makes those reads answer
+    /// [`DocumentError::Rebuilding`] rather than wait forever.
+    pub async fn spawning<S: Spawner>(
+        engine: E,
+        records: Records,
+        spawner: S,
+    ) -> Result<Self, DocumentError>
+    where
+        E: 'static,
+    {
+        Self::spawning_with_clock(engine, records, spawner, SystemClock, NodeId::derived()).await
+    }
+
+    /// Opens over schemas alone, for a caller with no record type to hand over.
+    ///
+    /// It cannot fill an index, so it refuses to open when the engine reports
+    /// one whose rows are missing: parking every read of that index forever
+    /// would be worse, and answering out of it would be wrong. A fresh store
+    /// never reports one, which is why this is enough for a caller that only
+    /// ever creates its own.
+    pub async fn over(engine: E, schemas: &[IndexSchema]) -> Result<Self, DocumentError> {
+        let db = Db::open(engine, schemas).await?;
+        rebuild::unfillable(db.building())?;
+        Ok(Self {
+            shared: Arc::new(Shared {
+                gate: Arc::new(Gate::default()),
+                db,
+            }),
+            ids: Snowflake::new(SystemClock, NodeId::derived()),
+        })
     }
 }
 
@@ -38,20 +107,86 @@ impl<E: Engine, C: Clock> Connection<E, C> {
     /// test uses to make two runs produce the same bytes.
     pub async fn with_clock(
         engine: E,
-        schemas: &[IndexSchema],
+        records: Records,
         clock: C,
         node: NodeId,
     ) -> Result<Self, DocumentError> {
+        let connection = Self::declared(engine, &records, clock, node).await?;
+        let building = connection.shared.db.building().to_vec();
+        if !building.is_empty() {
+            let held = Building::of(Arc::clone(&connection.shared.gate), building);
+            rebuild::drive(&connection.shared, &records, held).await?;
+        }
+        Ok(connection)
+    }
+
+    /// [`Connection::spawning`] against a clock and node of the caller's
+    /// choosing.
+    pub async fn spawning_with_clock<S: Spawner>(
+        engine: E,
+        records: Records,
+        spawner: S,
+        clock: C,
+        node: NodeId,
+    ) -> Result<Self, DocumentError>
+    where
+        E: 'static,
+    {
+        let connection = Self::declared(engine, &records, clock, node).await?;
+        let building = connection.shared.db.building().to_vec();
+        if building.is_empty() {
+            return Ok(connection);
+        }
+
+        let shared = Arc::clone(&connection.shared);
+        let held = Building::of(Arc::clone(&connection.shared.gate), building);
+        spawner.spawn(Box::pin(async move {
+            let held = held;
+            match rebuild::drive(&shared, &records, held).await {
+                Ok(()) => {}
+                Err(_refused) => {}
+            }
+        }));
+        Ok(connection)
+    }
+
+    /// Declares the catalog and arms the gate, without filling anything.
+    async fn declared(
+        engine: E,
+        records: &Records,
+        clock: C,
+        node: NodeId,
+    ) -> Result<Self, DocumentError> {
+        let db = Db::open(engine, &records.schemas()).await?;
+        let gate = Arc::new(Gate::over(db.building()));
         Ok(Self {
-            db: Db::open(engine, schemas).await?,
+            shared: Arc::new(Shared { db, gate }),
             ids: Snowflake::new(clock, node),
         })
     }
 
     /// The layer underneath, for the byte-level operations this one puts no
     /// seam over.
+    ///
+    /// Work run through here does not pass the gate, which is what going down a
+    /// level means. [`Db::building`] is what to read before scanning an index
+    /// this way.
     pub fn db(&self) -> &Db<E> {
-        &self.db
+        &self.shared.db
+    }
+
+    /// Runs work once every index it reads holds all of its rows.
+    ///
+    /// What it waits for is what the work *reads*, not what it names: filing a
+    /// row into an index that is still being filled is safe, and asserting
+    /// against one is not. Every method on this type goes through here, which
+    /// is what makes that one decision rather than one per method.
+    pub(crate) async fn gated<R: Reads<E>>(
+        &self,
+        work: &R,
+    ) -> Result<Outcome<R::Output>, DocumentError> {
+        self.shared.gate.clear(&work.reads()).await?;
+        Ok(self.shared.db.run(work).await?)
     }
 
     /// The next revision id, for a caller that is building the write itself.
@@ -80,7 +215,7 @@ impl<E: Engine, C: Clock> Connection<E, C> {
         let envelope = Revision::new(value, document, minted_at(revision), None);
 
         let write = write::insert(&envelope, document, revision, Codes::at(CODE_BASE));
-        match self.db.run(write.operation()).await? {
+        match self.gated(write.operation()).await? {
             Outcome::Committed(()) => Ok(Stored::new(revision, envelope)),
             Outcome::Aborted(code) => Err(write.refusal(code)),
         }
@@ -131,7 +266,7 @@ impl<E: Engine, C: Clock> Connection<E, C> {
         let was: &T = edited.as_ref().unwrap_or(&envelope);
 
         let write = write::supersede(&envelope, was, document, old, new, Codes::at(CODE_BASE));
-        match self.db.run(write.operation()).await? {
+        match self.gated(write.operation()).await? {
             Outcome::Committed(()) => Ok(Stored::new(new, envelope)),
             Outcome::Aborted(code) => Err(write.refusal(code)),
         }
@@ -226,8 +361,7 @@ impl<E: Engine, C: Clock> Connection<E, C> {
         revision: RevisionId,
     ) -> Result<Option<Revision<T>>, DocumentError> {
         match self
-            .db
-            .run(&Query::object::<Revision<T>>(revision.0))
+            .gated(&Query::object::<Revision<T>>(revision.0))
             .await?
         {
             Outcome::Committed(document) => Ok(document),
@@ -246,12 +380,33 @@ impl<E: Engine, C: Clock> Connection<E, C> {
             None => scan,
         };
         let query = scan.with_objects::<Revision<T>>();
-        match self.db.run(&query).await? {
+        match self.gated(&query).await? {
             Outcome::Committed(rows) => Ok(rows
                 .into_iter()
                 .map(|(row, envelope)| Stored::new(RevisionId(row.object), envelope))
                 .collect()),
             Outcome::Aborted(code) => Err(DocumentError::Aborted(code)),
         }
+    }
+}
+
+/// Work that can say which indexes it reads, so the gate knows what to wait on.
+///
+/// Two impls and no more: an operation and a query are the only things
+/// [`Db::run`] takes. It exists so the wait happens in one place rather than at
+/// every method that runs something.
+pub(crate) trait Reads<E: Engine>: Runnable<E> {
+    fn reads(&self) -> Vec<IndexId>;
+}
+
+impl<E: Engine, T: Clone + Send + Sync> Reads<E> for Operation<T> {
+    fn reads(&self) -> Vec<IndexId> {
+        Operation::reads(self)
+    }
+}
+
+impl<E: Engine, T: FromReadValue + Send + Sync> Reads<E> for Query<T> {
+    fn reads(&self) -> Vec<IndexId> {
+        Query::reads(self)
     }
 }

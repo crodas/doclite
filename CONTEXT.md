@@ -85,6 +85,35 @@ executor would have recorded has nothing left to protect.
 yields each row once, and what to do with one is the caller's; retiring and
 filing are the same walk with a different `Rows`.
 
+## Filling an index
+
+**Building.** An index that has been declared but does not yet hold every row
+it should. It is a fact an engine reports rather than one a caller declares: a
+store is the only place a previous run's shape was written down, so it is the
+only thing that can notice a declaration it has no rows for. `Defined` is what
+`Engine::define` answers and `Engine::rebuilt` is how one stops being building.
+
+**Rebuild.** Filling one, by paging `<record>_latest` and walking
+`Record::rows` for each live revision it names. It lives above `doclite-core`
+because an object is bytes there, which is the whole reason this is not an
+engine's job. `Records` is what a connection is opened over so there is a type
+to walk at all, and `records![User, Note]` builds one. ADR 0015, and ADR 0001
+for why an index is rebuildable in the first place.
+
+**Gate.** What holds a read back while the index it names is still building.
+Work is parked if and only if it *reads* such an index: filing a row into one is
+safe, because the row belongs there either way, and so is retiring a range. A
+precondition is a read, and that is the half that matters, because
+`require_absent` against an index with rows missing would let two documents
+claim one unique key. `Operation::reads` draws the line.
+
+**Spawner.** Where a rebuild runs when the caller would rather not wait for it.
+Supplied by the caller, because ADR 0006 keeps the runtime theirs. Not
+supplying one is the ordinary case: `Connection::open` waits, which costs one
+scan and needs no gate. A spawner that drops the work makes the reads parked on
+that index answer `DocumentError::Rebuilding` rather than wait for something
+that is not coming.
+
 ## Being an engine
 
 There are two ways, and a backend picks the one that matches what it has. ADR

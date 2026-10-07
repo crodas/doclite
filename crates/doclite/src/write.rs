@@ -13,11 +13,11 @@
 //! returning one. Nothing here needs an engine, which is what lets the tests at
 //! the bottom of this file read the steps rather than run them.
 
-use doclite_core::{exact, key, AbortCode, Index, Key, Operation};
+use doclite_core::{exact, key, AbortCode, Index, IndexId, Key, Operation};
 
 use crate::error::DocumentError;
 use crate::identity::{DocumentId, RevisionId};
-use crate::record::{Codes, Reason, Record, Rows};
+use crate::record::{Codes, Only, Reason, Record, Rows};
 use crate::revision::Revision;
 
 /// An operation and the names that turn its abort codes back into a reason.
@@ -133,6 +133,53 @@ pub(crate) fn supersede<T: Record>(
 
     Write {
         operation,
+        refusals: Refusals {
+            codes,
+            claimed: claim.claimed,
+        },
+    }
+}
+
+/// Files the rows this value belongs in, for some of its indexes only.
+///
+/// What a rebuild runs, one per live revision. The three things it does are
+/// forced:
+///
+/// It asserts the revision is still the live one, because the rows it is about
+/// to file are keyed on that revision and a writer that superseded it in the
+/// meantime has already retired them and filed the new ones. Without the
+/// assertion the rebuild files a row naming a dead revision, and
+/// `Connection::select` would hand a caller that revision as if it were live.
+///
+/// It claims every unique key among the indexes it is filling, because an index
+/// carries no constraint (ADR 0001) and a `#[unique]` index declared over
+/// existing data may be filled from two records that already share a key.
+/// Claiming is what makes that a refusal naming the index rather than two rows
+/// nothing can tell apart afterwards.
+///
+/// It files nothing for an index that is not named, because those rows are
+/// already there and a second one under the same key is not an update.
+pub(crate) fn backfill<T: Record>(
+    value: &T,
+    document: DocumentId,
+    revision: RevisionId,
+    wanted: &[IndexId],
+    codes: Codes,
+) -> Write {
+    let asserted = require_current::<T>(Operation::new(), document, revision, codes);
+
+    let mut claim = Claim {
+        operation: asserted,
+        codes,
+        claimed: Vec::new(),
+    };
+    value.rows(document, revision, &mut Only::these(&mut claim, wanted));
+
+    let mut file = File(claim.operation, revision);
+    value.rows(document, revision, &mut Only::these(&mut file, wanted));
+
+    Write {
+        operation: file.0,
         refusals: Refusals {
             codes,
             claimed: claim.claimed,

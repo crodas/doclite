@@ -7,7 +7,7 @@
 //! with a row, and in what order, is settled in one place above it and nowhere
 //! else.
 
-use doclite_core::{AbortCode, FromStorage, Index, IndexSchema, Key, ToStorage};
+use doclite_core::{AbortCode, FromStorage, Index, IndexId, IndexSchema, Key, ToStorage};
 
 use crate::identity::{DocumentId, RevisionId};
 
@@ -99,7 +99,7 @@ pub trait Record: ToStorage + FromStorage + Clone + Send + Sync + Sized {
 /// [`Stored`]: crate::Stored
 ///
 /// ```
-/// use doclite::{Connection, Document, DocumentError, Record};
+/// use doclite::{Connection, Document, DocumentError, Record, records};
 /// use doclite_memory::MemoryEngine;
 /// use serde::{Deserialize, Serialize};
 ///
@@ -110,7 +110,7 @@ pub trait Record: ToStorage + FromStorage + Clone + Send + Sync + Sized {
 /// }
 ///
 /// # async fn example() -> Result<(), DocumentError> {
-/// let conn = Connection::open(MemoryEngine::new(), &Note::schemas()).await?;
+/// let conn = Connection::open(MemoryEngine::new(), records![Note]).await?;
 /// let mut note = conn.insert(Note { shelf: 1 }).await?;
 /// note.shelf = 2;
 /// conn.update(note).await?;
@@ -126,7 +126,7 @@ pub trait Record: ToStorage + FromStorage + Clone + Send + Sync + Sized {
 /// The same struct marked `#[immutable]` does not compile:
 ///
 /// ```compile_fail
-/// use doclite::{Connection, Document, DocumentError, Record};
+/// use doclite::{Connection, Document, DocumentError, Record, records};
 /// use doclite_memory::MemoryEngine;
 /// use serde::{Deserialize, Serialize};
 ///
@@ -138,7 +138,7 @@ pub trait Record: ToStorage + FromStorage + Clone + Send + Sync + Sized {
 /// }
 ///
 /// # async fn example() -> Result<(), DocumentError> {
-/// let conn = Connection::open(MemoryEngine::new(), &Entry::schemas()).await?;
+/// let conn = Connection::open(MemoryEngine::new(), records![Entry]).await?;
 /// let mut entry = conn.insert(Entry { shelf: 1 }).await?;
 /// entry.shelf = 2;
 /// conn.update(entry).await?;
@@ -163,4 +163,39 @@ pub trait Rows {
         name: &'static str,
         unique: bool,
     );
+}
+
+/// A walk narrowed to some of a record's indexes, forwarding to another
+/// [`Rows`].
+///
+/// A rebuild files the rows of the indexes that are missing them and must leave
+/// every other index alone, because those rows are already there and filing one
+/// twice is a second row under one key. Narrowing the walk rather than writing a
+/// second one is what keeps `Retire`, `File` and `Claim` the only places that
+/// know what a row becomes: they cannot disagree with a rebuild about a key,
+/// because the rebuild is them.
+pub struct Only<'a, R> {
+    into: &'a mut R,
+    wanted: &'a [IndexId],
+}
+
+impl<'a, R: Rows> Only<'a, R> {
+    /// Forwards only the rows belonging to these indexes.
+    pub fn these(into: &'a mut R, wanted: &'a [IndexId]) -> Self {
+        Self { into, wanted }
+    }
+}
+
+impl<R: Rows> Rows for Only<'_, R> {
+    fn row<const N: usize>(
+        &mut self,
+        index: &Index<N>,
+        key: Key<N>,
+        name: &'static str,
+        unique: bool,
+    ) {
+        if self.wanted.contains(&index.id()) {
+            self.into.row(index, key, name, unique);
+        }
+    }
 }

@@ -8,7 +8,7 @@ pub(crate) mod value;
 
 use std::marker::PhantomData;
 
-use crate::model::index::Index;
+use crate::model::index::{Index, IndexId};
 use crate::model::object::ObjectId;
 use crate::model::range::Range;
 use crate::model::row::Row;
@@ -38,6 +38,12 @@ impl<T> Query<T> {
     /// pushdown decides against.
     pub fn plan(&self) -> &ReadPlan {
         &self.plan
+    }
+
+    /// Every index this query reads, for a caller waiting on one whose rows are
+    /// not all there yet.
+    pub fn reads(&self) -> Vec<IndexId> {
+        self.plan.reads()
     }
 }
 

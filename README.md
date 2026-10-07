@@ -7,7 +7,7 @@ own query builder, and its own revision history, and that is the whole of what
 most callers touch.
 
 ```rust
-use doclite::{Column, Connection, Document, Record};
+use doclite::{Column, Connection, Document, Record, records};
 use doclite_memory::MemoryEngine;
 use serde::{Deserialize, Serialize};
 
@@ -25,7 +25,7 @@ struct User {
     accepted_tos: bool,
 }
 
-let conn = Connection::open(MemoryEngine::new(), &User::schemas()).await?;
+let conn = Connection::open(MemoryEngine::new(), records![User]).await?;
 
 let user = conn
     .insert(User { email, country, city, state, age: 24, accepted_tos: true })
@@ -205,7 +205,7 @@ process is gone, and swapping it in is the whole of the change:
 use doclite_sqlite::SqliteEngine;
 
 let engine = SqliteEngine::open("clinic.db")?;
-let conn = Connection::open(engine, &User::schemas()).await?;
+let conn = Connection::open(engine, records![User]).await?;
 ```
 
 The file is created if it is not there, and opening it again finds what was

@@ -6,8 +6,8 @@
 
 use doclite::id::EPOCH_MS;
 use doclite::{
-    greater_than, Column, Connection, Document, DocumentError, DocumentId, FixedClock, NodeId,
-    Record, Ref, Stored, Timestamp,
+    greater_than, records, Column, Connection, Document, DocumentError, DocumentId, FixedClock,
+    NodeId, Record, Records, Ref, Stored, Timestamp,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -92,16 +92,14 @@ struct Deal {
     closes_on: Option<String>,
 }
 
-fn schemas() -> Vec<IndexSchema> {
-    let mut all = Account::schemas();
-    all.extend(Deal::schemas());
-    all
+fn catalog() -> Records {
+    records![Account, Deal]
 }
 
 async fn open<U: Under>() -> Connection<U::Engine, FixedClock> {
     Connection::with_clock(
         U::engine().await,
-        &schemas(),
+        catalog(),
         FixedClock(Timestamp(EPOCH_MS + 1_000)),
         NodeId::new(1).expect("one fits in ten bits"),
     )
@@ -618,7 +616,7 @@ impl<E: Engine> Engine for Counted<E> {
 async fn following_a_set_of_references_costs_one_scan<U: Under>() -> Result<(), DocumentError> {
     let conn = Connection::with_clock(
         Counted::new(U::engine().await),
-        &schemas(),
+        catalog(),
         FixedClock(Timestamp(EPOCH_MS + 1_000)),
         NodeId::new(1).expect("one fits in ten bits"),
     )

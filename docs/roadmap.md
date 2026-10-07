@@ -110,6 +110,12 @@ Small, real, and each one already written down where it bites.
   whose integers are floats can hold exactly, so a browser parsing one loses
   precision. SQLite's own JSON functions read them exactly, which is the case
   the format was chosen for.
+- **The generated index cannot be rebuilt.** A rebuild pages
+  `<record>_latest` to find the live revisions, so that index is the one thing
+  it cannot derive. A record type new to the store has every index of it
+  reported and nothing to walk, which is ordinary; the generated index missing
+  rows while an index derived from it is not is refused as
+  `DocumentError::MissingLatest`. Nothing in the crate produces that state.
 - **One contention test has failed once.** `one_writer_takes_the_key` failed
   during a full parallel run and did not reproduce across eleven later runs. The
   cause is unverified. The plausible candidate is the retry loop exhausting its

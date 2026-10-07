@@ -5,7 +5,7 @@ pub(crate) mod template;
 
 use crate::check::Check;
 use crate::model::column::IntoObject;
-use crate::model::index::{Index, IndexSchema};
+use crate::model::index::{Index, IndexId, IndexSchema};
 use crate::model::key::Key;
 use crate::model::object::ObjectId;
 use crate::model::range::Range;
@@ -15,6 +15,7 @@ use crate::operation::step::{Expect, Step};
 use crate::operation::template::RowRef;
 use crate::outcome::abort::AbortCode;
 use crate::outcome::error::BuildError;
+use crate::query::plan::named_once;
 use crate::query::Query;
 
 /// Work to be committed or refused, whole.
@@ -33,6 +34,25 @@ pub struct Operation<T = ()> {
     /// and [`Db::run`](crate::Db::run) checks before it touches an engine.
     error: Option<BuildError>,
     value: T,
+}
+
+/// The indexes one step reads, appended in the order they are named.
+fn read_by(step: &Step, into: &mut Vec<IndexId>) {
+    match step {
+        Step::RequireObject { .. }
+        | Step::PutObject { .. }
+        | Step::PutIndex { .. }
+        | Step::DeleteIndex { .. } => {}
+        Step::Require { index, .. } => named_once(*index, into),
+        Step::ForEach { scan, template } => {
+            for index in scan.reads() {
+                named_once(index, into);
+            }
+            for step in template {
+                read_by(step, into);
+            }
+        }
+    }
 }
 
 impl Default for Operation<()> {
@@ -62,6 +82,24 @@ impl<T> Operation<T> {
     /// Whether running this changes anything.
     pub fn mutates(&self) -> bool {
         self.steps.iter().any(Step::mutates)
+    }
+
+    /// Every index this operation reads, which is not every index it names.
+    ///
+    /// Filing a row into an index whose rows are not all there is safe: the row
+    /// belongs there either way, and the fill will not file it twice. Retiring a
+    /// range is safe for the same reason. **Reading** one is not, and a
+    /// precondition is a read: `require_absent` on an index with rows missing
+    /// finds a key absent that another document already holds, so two documents
+    /// claim one unique key and nothing afterwards can tell. That asymmetry is
+    /// the whole reason this is `reads` rather than `indexes`, and it is why
+    /// `PutIndex` and `DeleteIndex` are deliberately absent below.
+    pub fn reads(&self) -> Vec<IndexId> {
+        let mut named = Vec::new();
+        for step in &self.steps {
+            read_by(step, &mut named);
+        }
+        named
     }
 
     /// Whether index handles resolve, keys are the width their index is, a
@@ -205,5 +243,79 @@ impl<T> Operation<T> {
 impl<T: Clone> Operation<T> {
     pub(crate) fn value(&self) -> T {
         self.value.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::index::ColumnType;
+    use crate::model::range::{all, exact};
+    use crate::{key, ObjectId};
+
+    static PLAIN: Index<1> = Index::typed("plain", &[ColumnType::Str]);
+    static OTHER: Index<1> = Index::typed("other", &[ColumnType::Str]);
+    const REFUSED: AbortCode = AbortCode::new(900);
+
+    /// Filing a row into an index whose rows are not all there is safe, so it
+    /// must not make the caller wait: the row belongs in that index either way,
+    /// and a fill that is still running will not file it twice.
+    #[test]
+    fn filing_a_row_is_not_a_read_of_the_index_it_goes_in() {
+        let op = Operation::new().put_index(&PLAIN, key!["a"], ObjectId(7));
+        assert_eq!(op.reads(), Vec::new());
+    }
+
+    /// Retiring a range is safe for the same reason: it either removes a row a
+    /// fill already filed or matches nothing at all.
+    #[test]
+    fn retiring_a_range_is_not_a_read_either() {
+        let op = Operation::new().delete_index(&PLAIN, exact(key!["a"]));
+        assert_eq!(op.reads(), Vec::new());
+    }
+
+    /// The one that matters. `require_absent` on an index with rows missing
+    /// finds a key absent that another document already holds, so two
+    /// documents claim one unique key and nothing afterwards can tell them
+    /// apart. A unique claim has to wait.
+    #[test]
+    fn claiming_a_unique_key_is_a_read() {
+        let op = Operation::new().require_absent(&PLAIN, exact(key!["a"]), REFUSED);
+        assert_eq!(op.reads(), vec![PLAIN.id()]);
+    }
+
+    #[test]
+    fn counting_a_range_is_a_read() {
+        let op = Operation::new().require_count(&PLAIN, all(), 1, REFUSED);
+        assert_eq!(op.reads(), vec![PLAIN.id()]);
+    }
+
+    /// A write is a read of what it asserted and nothing more, which is what
+    /// keeps an insert from waiting on the index it is only filing into.
+    #[test]
+    fn a_write_waits_for_what_it_asserts_and_not_for_what_it_files() {
+        let op = Operation::new()
+            .require_absent(&PLAIN, exact(key!["a"]), REFUSED)
+            .put_object(ObjectId(7), b"body".to_vec())
+            .put_index(&PLAIN, key!["a"], ObjectId(7))
+            .put_index(&OTHER, key!["a"], ObjectId(7));
+        assert_eq!(op.reads(), vec![PLAIN.id()], "only the claim is a read");
+    }
+
+    #[test]
+    fn a_for_each_reads_the_index_it_scans() {
+        let scan = Query::scan(&OTHER, all()).limit(10);
+        let op = Operation::new().for_each(scan, |row| {
+            Operation::new().put_index(&PLAIN, key![row.key(0)], row.doc())
+        });
+        assert_eq!(op.reads(), vec![OTHER.id()]);
+    }
+
+    #[test]
+    fn an_index_read_twice_is_waited_for_once() {
+        let op = Operation::new()
+            .require_absent(&PLAIN, exact(key!["a"]), REFUSED)
+            .require_count(&PLAIN, all(), 0, REFUSED);
+        assert_eq!(op.reads(), vec![PLAIN.id()]);
     }
 }

@@ -20,7 +20,7 @@ use doclite::doclite_core::{
 };
 use doclite::id::EPOCH_MS;
 use doclite::{
-    Column, Connection, Document, DocumentError, FixedClock, NodeId, Record, Stored, Timestamp,
+    records, Column, Connection, Document, DocumentError, FixedClock, NodeId, Stored, Timestamp,
 };
 use serde::{Deserialize, Serialize};
 
@@ -52,7 +52,7 @@ fn node() -> NodeId {
 }
 
 async fn open<U: Under>() -> Connection<U::Engine, FixedClock> {
-    Connection::with_clock(U::engine().await, &Note::schemas(), clock(), node())
+    Connection::with_clock(U::engine().await, records![Note], clock(), node())
         .await
         .expect("the engine accepts its own schemas")
 }
@@ -304,8 +304,7 @@ struct Ticket {
 
 async fn a_stale_edit_of_a_unique_only_record_loses_rather_than_clobbering<U: Under>(
 ) -> Result<(), DocumentError> {
-    let conn =
-        Connection::with_clock(U::engine().await, &Ticket::schemas(), clock(), node()).await?;
+    let conn = Connection::with_clock(U::engine().await, records![Ticket], clock(), node()).await?;
 
     conn.insert(Ticket {
         ticket: "T-1".into(),
@@ -379,7 +378,7 @@ impl<E: Engine> Engine for Balk<E> {
 async fn balking<U: Under>() -> Connection<Balk<U::Engine>, FixedClock> {
     Connection::with_clock(
         Balk::new(U::engine().await),
-        &Note::schemas(),
+        records![Note],
         clock(),
         node(),
     )

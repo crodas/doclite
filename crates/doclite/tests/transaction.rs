@@ -1,7 +1,6 @@
 //! Several records filed as one operation, and what happens when one refuses.
 
-use doclite::doclite_core::IndexSchema;
-use doclite::{Column, Connection, Document, DocumentError, Record, Ref};
+use doclite::{records, Column, Connection, Document, DocumentError, Records, Ref};
 use serde::{Deserialize, Serialize};
 
 mod under;
@@ -36,14 +35,12 @@ struct Mark {
     note: Ref<Note>,
 }
 
-fn schemas() -> Vec<IndexSchema> {
-    let mut all = Note::schemas();
-    all.extend(Mark::schemas());
-    all
+fn catalog() -> Records {
+    records![Note, Mark]
 }
 
 async fn store<U: Under>() -> Connection<U::Engine> {
-    Connection::open(U::engine().await, &schemas())
+    Connection::open(U::engine().await, catalog())
         .await
         .expect("a fresh store")
 }

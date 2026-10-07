@@ -17,8 +17,8 @@
 
 use std::sync::Arc;
 
-use doclite::doclite_core::{all, IndexSchema, Outcome, Query, StorageError};
-use doclite::{Column, Connection, Document, DocumentError, Record};
+use doclite::doclite_core::{all, Outcome, Query, StorageError};
+use doclite::{records, Column, Connection, Document, DocumentError, Records};
 use serde::{Deserialize, Serialize};
 
 mod under;
@@ -48,16 +48,14 @@ struct Counter {
 /// still finishes quickly.
 const WRITERS: usize = 8;
 
-fn schemas() -> Vec<IndexSchema> {
-    let mut all = Member::schemas();
-    all.extend(Counter::schemas());
-    all
+fn catalog() -> Records {
+    records![Member, Counter]
 }
 
 /// The system clock rather than a pinned one, because reproducible bytes are
 /// not the question here and one mint hands out ids to every task.
 async fn open<U: Under>() -> Connection<U::Engine> {
-    Connection::open(U::engine().await, &schemas())
+    Connection::open(U::engine().await, catalog())
         .await
         .expect("the engine accepts its own schemas")
 }

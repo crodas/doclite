@@ -4,7 +4,7 @@
 //! cargo run -p doclite --example quickstart
 //! ```
 
-use doclite::{Column, Connection, Document, DocumentError, Record};
+use doclite::{records, Column, Connection, Document, DocumentError};
 use doclite_memory::MemoryEngine;
 use serde::{Deserialize, Serialize};
 
@@ -34,7 +34,7 @@ fn task(title: &str, priority: u8) -> Task {
 
 #[tokio::main]
 async fn main() -> Result<(), DocumentError> {
-    let conn = Connection::open(MemoryEngine::new(), &Task::schemas()).await?;
+    let conn = Connection::open(MemoryEngine::new(), records![Task]).await?;
 
     conn.insert(task("Write the release notes", 2)).await?;
     conn.insert(task("Fix the flaky test", 1)).await?;

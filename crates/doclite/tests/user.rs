@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use doclite::id::{minted_at, EPOCH_MS};
 use doclite::{
-    greater_than, Clock, Column, Connection, Document, DocumentError, DocumentId, FixedClock,
-    NodeId, Record, Revision, RevisionId, Timestamp,
+    greater_than, records, Clock, Column, Connection, Document, DocumentError, DocumentId,
+    FixedClock, NodeId, Record, Revision, RevisionId, Timestamp,
 };
 use serde::{Deserialize, Serialize};
 
@@ -65,7 +65,7 @@ fn clock() -> FixedClock {
 async fn open<U: Under>() -> Connection<U::Engine, FixedClock> {
     Connection::with_clock(
         U::engine().await,
-        &User::schemas(),
+        records![User],
         clock(),
         NodeId::new(7).expect("seven fits in ten bits"),
     )
@@ -496,7 +496,7 @@ async fn a_revision_is_stamped_with_the_millisecond_its_id_encodes<U: Under>(
 ) -> Result<(), DocumentError> {
     let conn = Connection::with_clock(
         U::engine().await,
-        &User::schemas(),
+        records![User],
         MovingClock(&TICKS),
         NodeId::new(7).expect("seven fits in ten bits"),
     )

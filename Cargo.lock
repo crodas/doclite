@@ -89,6 +89,7 @@ dependencies = [
  "doclite-derive",
  "doclite-memory",
  "doclite-sqlite",
+ "futures-channel",
  "serde",
  "serde_json",
  "thiserror",

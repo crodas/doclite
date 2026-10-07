@@ -15,7 +15,7 @@ design in full.
 use doclite_sqlite::SqliteEngine;
 
 let engine = SqliteEngine::open("clinic.db")?;
-let conn = Connection::open(engine, &User::schemas()).await?;
+let conn = Connection::open(engine, records![User]).await?;
 ```
 
 That is the change. The file is created if it is not there, and opening it again

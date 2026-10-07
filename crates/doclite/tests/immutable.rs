@@ -15,7 +15,7 @@
 use doclite::doclite_core::{all, Index, Key, ObjectId, Outcome, Query};
 use doclite::id::EPOCH_MS;
 use doclite::{
-    Column, Connection, Document, DocumentError, DocumentId, FixedClock, NodeId, Record,
+    records, Column, Connection, Document, DocumentError, DocumentId, FixedClock, NodeId, Record,
     RevisionId, Rows, Stored, Timestamp,
 };
 use serde::{Deserialize, Serialize};
@@ -78,7 +78,7 @@ fn node() -> NodeId {
 }
 
 async fn open<U: Under>() -> Connection<U::Engine, FixedClock> {
-    Connection::with_clock(U::engine().await, &Entry::schemas(), clock(), node())
+    Connection::with_clock(U::engine().await, records![Entry], clock(), node())
         .await
         .expect("the engine accepts its own schemas")
 }
