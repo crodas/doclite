@@ -7,16 +7,23 @@
 //! `Db::building` reports; this waits.
 //!
 //! The waiters are `futures_channel::oneshot` receivers, which belong to no
-//! runtime (ADR 0006). The senders are held *here* and removed by [`Building`]
-//! when it drops, which is what turns an abandoned rebuild into an error rather
-//! than a hang: a spawner that drops the future drops the guard, the guard
-//! drops the senders, and every parked read wakes with
-//! [`DocumentError::Rebuilding`].
+//! runtime (ADR 0006). The senders are held *here* and taken by [`Building`],
+//! which is what turns a rebuild that did not finish into an error rather than
+//! a hang: dropping the senders without firing them wakes every parked read.
+//! Why they woke is then a question about the entry they were parked on, which
+//! is why [`Filling`] distinguishes a rebuild that failed from one that was
+//! dropped. A reader is owed the reason, not just the fact.
 //!
 //! Nothing holds the lock across an await. [`Gate::waiting`] takes it, collects
 //! a receiver per index, and gives it up before any of them is awaited.
+//!
+//! `armed` is what keeps all of this off the ordinary path. A store whose
+//! indexes are all filled holds an empty map for its whole life, and checking
+//! one relaxed bool is cheaper than taking the lock and building the index list
+//! to look up in it.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use doclite_core::{IndexId, StorageError};
@@ -31,13 +38,21 @@ type Parked = (IndexId, oneshot::Receiver<()>);
 
 /// Where an index that is not yet readable has got to.
 ///
-/// Absence from the map is the third state and means filled. Keeping
-/// abandonment as its own entry rather than a removal is what stops a read from
-/// mistaking "nothing will ever fill this" for "this is complete" and answering
-/// out of an index with rows missing.
+/// Absence from the map is the fourth state and means filled. Keeping the other
+/// three as entries rather than removals is what stops a read from mistaking
+/// "nothing will ever fill this" for "this is complete" and answering out of an
+/// index with rows missing.
+///
+/// [`Filling::Failed`] and [`Filling::Abandoned`] are both terminal and are not
+/// the same thing. A rebuild that refused has a reason the caller asked for and
+/// is owed; one that was dropped has no reason beyond having been dropped.
+/// Collapsing them is what made a taken unique key report itself as a rebuild
+/// going away.
 enum Filling {
     /// Something is filling it, and these are waiting for it to finish.
     Running(Vec<oneshot::Sender<()>>),
+    /// Filling it was tried and refused, for this reason.
+    Failed(DocumentError),
     /// Nothing is filling it any more, and nothing in this handle will.
     Abandoned,
 }
@@ -50,12 +65,21 @@ enum Filling {
 #[derive(Default)]
 pub(crate) struct Gate {
     building: Mutex<Waiters>,
+    /// Whether the map holds anything at all.
+    ///
+    /// Kept beside the map rather than derived from it so the ordinary path
+    /// never takes the lock. It is set once at construction and cleared when
+    /// the last entry is removed, both of which happen under the lock, so it
+    /// cannot drift: every transition that empties the map is the one that
+    /// clears this.
+    armed: AtomicBool,
 }
 
 impl Gate {
     /// A gate over the indexes an engine said it has rows missing from.
     pub(crate) fn over(building: &[IndexId]) -> Self {
         Self {
+            armed: AtomicBool::new(!building.is_empty()),
             building: Mutex::new(
                 building
                     .iter()
@@ -63,6 +87,15 @@ impl Gate {
                     .collect(),
             ),
         }
+    }
+
+    /// Whether anything here could hold a read back.
+    ///
+    /// False for the whole life of a store whose indexes are all filled, which
+    /// is the case worth making cheap: a caller that checks this first pays one
+    /// relaxed load instead of a lock and a list of the indexes it reads.
+    pub(crate) fn armed(&self) -> bool {
+        self.armed.load(Ordering::Acquire)
     }
 
     /// Waits until every index this work reads holds all of its rows.
@@ -76,10 +109,26 @@ impl Gate {
         for (index, answer) in self.waiting(reads)? {
             match answer.await {
                 Ok(()) => {}
-                Err(_abandoned) => return Err(DocumentError::Rebuilding { index }),
+                Err(_woken) => return Err(self.why(index)?),
             }
         }
         Ok(())
+    }
+
+    /// Why a parked read was woken without its index being filled.
+    ///
+    /// The sender was dropped rather than fired, which says only that the
+    /// rebuild did not finish. Which of the two ways it did not finish is on the
+    /// entry, so this is a second look rather than an assumption. An entry that
+    /// has gone entirely means the index was filled between the wake and this
+    /// lookup, and the read may proceed.
+    fn why(&self, index: IndexId) -> Result<DocumentError, DocumentError> {
+        match self.held()?.get(&index) {
+            Some(Filling::Failed(error)) => Ok(error.clone()),
+            Some(Filling::Abandoned) | Some(Filling::Running(_)) | None => {
+                Ok(DocumentError::Rebuilding { index })
+            }
+        }
     }
 
     /// One receiver per index that is still being filled, with the lock given
@@ -94,6 +143,7 @@ impl Gate {
         for index in reads {
             match building.get_mut(index) {
                 None => {}
+                Some(Filling::Failed(error)) => return Err(error.clone()),
                 Some(Filling::Abandoned) => {
                     return Err(DocumentError::Rebuilding { index: *index })
                 }
@@ -111,9 +161,14 @@ impl Gate {
     ///
     /// The entry goes, and its absence is what later reads see as filled.
     pub(crate) fn opened(&self, index: IndexId) -> Result<(), DocumentError> {
-        let waiters = match self.held()?.remove(&index) {
-            None | Some(Filling::Abandoned) => Vec::new(),
-            Some(Filling::Running(waiters)) => waiters,
+        let waiters = {
+            let mut building = self.held()?;
+            let taken = match building.remove(&index) {
+                None | Some(Filling::Abandoned) | Some(Filling::Failed(_)) => Vec::new(),
+                Some(Filling::Running(waiters)) => waiters,
+            };
+            self.armed.store(!building.is_empty(), Ordering::Release);
+            taken
         };
         for waiter in waiters {
             match waiter.send(()) {
@@ -122,6 +177,22 @@ impl Gate {
             }
         }
         Ok(())
+    }
+
+    /// Records why filling this index was refused, waking everyone parked on it.
+    ///
+    /// The entry stays and keeps the gate armed, because the index still has
+    /// rows missing and a later read of it has to be refused too rather than
+    /// answered.
+    fn failed(&self, index: IndexId, error: &DocumentError) {
+        match self.held() {
+            Ok(mut building) => {
+                if let Some(entry) = building.get_mut(&index) {
+                    *entry = Filling::Failed(error.clone());
+                }
+            }
+            Err(_poisoned) => {}
+        }
     }
 
     /// Marks this index as one nothing will fill, dropping the senders without
@@ -156,12 +227,14 @@ impl Gate {
 
 /// The indexes one rebuild is responsible for, held for as long as it runs.
 ///
-/// Its only job is [`Drop`]. A rebuild that finishes calls [`Building::filled`]
-/// per index and the guard has nothing left to abandon; one that is dropped
-/// part way, because the spawner discarded the future or the task was
-/// cancelled, releases every index it still holds *without* firing, and the
-/// reads parked on them get an error naming the index instead of waiting for
-/// something that will never arrive.
+/// A rebuild that finishes calls [`Building::filled`] per index and the guard
+/// has nothing left to release. One that refuses calls [`Building::failed`],
+/// which keeps the reason so a reader is told what went wrong rather than only
+/// that something did. One that is dropped part way, because the spawner
+/// discarded the future or the task was cancelled, falls to [`Drop`], which
+/// releases every index it still holds *without* firing: the reads parked on
+/// them then get an error naming the index instead of waiting for something
+/// that will never arrive.
 ///
 /// It owns its share of the gate rather than borrowing one, so that it can be
 /// moved into the future handed to a [`Spawner`](crate::Spawner). That is not a
@@ -183,6 +256,18 @@ impl Building {
     pub(crate) fn filled(&mut self, index: IndexId) -> Result<(), DocumentError> {
         self.held.retain(|held| *held != index);
         self.gate.opened(index)
+    }
+
+    /// Filling the indexes still held was refused, for this reason.
+    ///
+    /// Takes every one of them rather than a single index, because a refusal
+    /// stops the whole rebuild: an index it had not reached yet is as unfillable
+    /// as the one that refused. The guard is emptied, so the [`Drop`] that
+    /// follows has nothing left to call abandoned and the reason survives.
+    pub(crate) fn failed(&mut self, error: &DocumentError) {
+        for index in std::mem::take(&mut self.held) {
+            self.gate.failed(index, error);
+        }
     }
 }
 
@@ -247,6 +332,106 @@ mod tests {
             ),
             "a read arriving after the abandonment is told, not parked and not answered"
         );
+    }
+
+    /// A refusal is a reason, and the reader is owed it. Collapsing this into
+    /// abandonment is what made a taken unique key report itself as a rebuild
+    /// going away.
+    #[tokio::test]
+    async fn a_refused_rebuild_tells_a_parked_reader_why() {
+        let gate = Arc::new(Gate::over(&[ONE]));
+        let parked = gate.waiting(&[ONE]).expect("one is building");
+
+        let mut building = Building::of(Arc::clone(&gate), vec![ONE]);
+        building.failed(&DocumentError::Duplicate {
+            index: "one_by_key",
+        });
+        drop(building);
+
+        for (_index, answer) in parked {
+            assert!(answer.await.is_err(), "the refusal woke the reader");
+        }
+        assert!(
+            matches!(
+                gate.clear(&[ONE]).await,
+                Err(DocumentError::Duplicate {
+                    index: "one_by_key"
+                })
+            ),
+            "the reason survives the guard being dropped"
+        );
+    }
+
+    /// The same answer for a read that was not there when it happened, so the
+    /// two paths into the gate cannot disagree about one failure.
+    #[tokio::test]
+    async fn a_reader_arriving_after_a_refusal_gets_the_same_reason() {
+        let gate = Arc::new(Gate::over(&[ONE]));
+        let mut building = Building::of(Arc::clone(&gate), vec![ONE]);
+        building.failed(&DocumentError::NotFound);
+        drop(building);
+
+        assert!(matches!(
+            gate.clear(&[ONE]).await,
+            Err(DocumentError::NotFound)
+        ));
+    }
+
+    /// A refusal stops the whole rebuild, so an index it had not reached is as
+    /// unfillable as the one that refused.
+    #[tokio::test]
+    async fn a_refusal_covers_every_index_the_rebuild_still_held() {
+        let gate = Arc::new(Gate::over(&[ONE, TWO]));
+        let mut building = Building::of(Arc::clone(&gate), vec![ONE, TWO]);
+        building.failed(&DocumentError::NotFound);
+        drop(building);
+
+        assert!(matches!(
+            gate.clear(&[TWO]).await,
+            Err(DocumentError::NotFound)
+        ));
+    }
+
+    /// The fast path. A gate over nothing is never armed, and one whose last
+    /// index fills stops being armed, or every operation keeps paying for a
+    /// rebuild that finished.
+    #[test]
+    fn a_gate_stops_being_armed_once_the_last_index_fills() {
+        assert!(!Gate::over(&[]).armed(), "nothing to hold anything back");
+
+        let gate = Arc::new(Gate::over(&[ONE, TWO]));
+        assert!(gate.armed());
+
+        let mut building = Building::of(Arc::clone(&gate), vec![ONE, TWO]);
+        building.filled(ONE).expect("one is filled");
+        assert!(gate.armed(), "two is still outstanding");
+
+        building.filled(TWO).expect("two is filled");
+        assert!(!gate.armed(), "nothing is outstanding");
+    }
+
+    /// A refused index still has rows missing, so the gate has to stay armed or
+    /// a later read would skip the check and answer out of it.
+    #[test]
+    fn a_refused_index_keeps_the_gate_armed() {
+        let gate = Arc::new(Gate::over(&[ONE]));
+        let mut building = Building::of(Arc::clone(&gate), vec![ONE]);
+        building.failed(&DocumentError::NotFound);
+        drop(building);
+
+        assert!(
+            gate.armed(),
+            "an index that could not be filled still gates"
+        );
+    }
+
+    /// The same for one nothing is filling any more.
+    #[test]
+    fn an_abandoned_index_keeps_the_gate_armed() {
+        let gate = Arc::new(Gate::over(&[ONE]));
+        drop(Building::of(Arc::clone(&gate), vec![ONE]));
+
+        assert!(gate.armed());
     }
 
     /// A rebuild that finished has nothing left for the guard to abandon, so

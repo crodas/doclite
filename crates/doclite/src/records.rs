@@ -71,16 +71,6 @@ impl Records {
         self.types.iter().flat_map(|held| held.schemas()).collect()
     }
 
-    /// How many record types this holds.
-    pub fn len(&self) -> usize {
-        self.types.len()
-    }
-
-    /// Whether it holds none, which `Connection` refuses to open over.
-    pub fn is_empty(&self) -> bool {
-        self.types.is_empty()
-    }
-
     pub(crate) fn types(&self) -> &[Box<dyn Rebuilds>] {
         &self.types
     }

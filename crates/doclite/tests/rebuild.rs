@@ -17,7 +17,12 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-use doclite::{records, Connection, Document, DocumentError, Spawner};
+use async_trait::async_trait;
+use doclite::doclite_core::{
+    Answers, Applied, Batch, Defined, Engine, IndexId, IndexSchema, KeyRange, RangeDelete, Reads,
+    StorageError, ToOrdBytes,
+};
+use doclite::{records, Connection, Document, DocumentError, DocumentId, Spawner};
 use doclite_sqlite::SqliteEngine;
 use serde::{Deserialize, Serialize};
 
@@ -456,6 +461,164 @@ async fn a_rebuild_pages_through_more_records_than_one_page_holds() -> Result<()
         total += found.len();
     }
     assert_eq!(total, 600, "every record across every page was filed once");
+
+    remove(&path);
+    Ok(())
+}
+
+/// A rebuild that refuses tells the reader why, rather than reporting that it
+/// went away.
+///
+/// The eager path answers `Duplicate` because the refusal is its return value.
+/// A spawned rebuild has no caller to return to, so the reason has to survive
+/// on the gate, and collapsing it into abandonment is what made these two
+/// doors disagree about one failure.
+#[tokio::test]
+async fn a_refused_spawned_rebuild_reports_the_reason_not_abandonment() -> Result<(), DocumentError>
+{
+    static DEFERRED: Deferred = Deferred {
+        held: Mutex::new(Vec::new()),
+    };
+
+    let path = scratch();
+    remove(&path);
+
+    before(&path, &[("one", "same"), ("two", "same")]).await?;
+
+    let engine = SqliteEngine::open(&path)?;
+    let conn = Connection::spawning(engine, records![v3::Note], &DEFERRED).await?;
+
+    for work in DEFERRED.taken() {
+        work.await;
+    }
+
+    match v3::Note::query(&conn)
+        .by_shelf("same".to_string())
+        .get_many()
+        .await
+    {
+        Err(DocumentError::Duplicate { index }) => {
+            assert_eq!(index, "note_by_shelf", "the index that could not be filled")
+        }
+        Err(other) => panic!("a taken key, not {other}"),
+        Ok(_) => panic!("the index could not be filled, so nothing may answer from it"),
+    }
+
+    remove(&path);
+    Ok(())
+}
+
+/// An engine that retires one document's generated-index row just before
+/// forwarding the first batch it is given.
+///
+/// `Engine::apply` is called by the executor rather than from inside the SQLite
+/// connection's job, so a wrapper may apply a batch of its own first without
+/// queueing behind the one it is about to forward. That is what makes the
+/// window between the backfill's scan and its commit reachable from a test at
+/// all.
+///
+/// Retiring the row is what `require_current` asks about, so it is the same
+/// thing a concurrent writer does to that assertion: the revision the backfill
+/// scanned is no longer the live one.
+struct Interpose<E> {
+    inner: E,
+    retire: Mutex<Option<DocumentId>>,
+}
+
+impl<E> Interpose<E> {
+    fn new(inner: E, document: DocumentId) -> Self {
+        Self {
+            inner,
+            retire: Mutex::new(Some(document)),
+        }
+    }
+}
+
+#[async_trait]
+impl<E: Engine> Engine for Interpose<E> {
+    async fn define(&self, indexes: &[IndexSchema]) -> Result<Defined, StorageError> {
+        self.inner.define(indexes).await
+    }
+
+    async fn read(&self, reads: &Reads<'_>) -> Result<Answers, StorageError> {
+        self.inner.read(reads).await
+    }
+
+    async fn apply(&self, batch: &Batch<'_>) -> Result<Applied, StorageError> {
+        let armed = {
+            let mut retire = self.retire.lock().expect("the interposer is not poisoned");
+            retire.take()
+        };
+
+        if let Some(document) = armed {
+            let delete = [RangeDelete {
+                index: IndexId("note_latest"),
+                range: KeyRange::Prefix(vec![document.to_ord_bytes()]),
+            }];
+            self.inner
+                .apply(&Batch::Writes {
+                    asserts: &[],
+                    objects: &[],
+                    delete: &delete,
+                    insert: &[],
+                })
+                .await?;
+        }
+
+        self.inner.apply(batch).await
+    }
+}
+
+/// A document superseded between the backfill's scan and its commit is dropped
+/// from the page, and the rest are filed.
+///
+/// This is the branch the per-document `require_current` exists for. Without
+/// it the backfill would file a row naming a revision that is no longer live,
+/// and `Connection::select` would hand that dead revision back as if it were
+/// current.
+///
+/// The retired document answers through nothing afterwards, which is correct
+/// rather than incidental: it no longer has a live revision for a row to name.
+#[tokio::test]
+async fn a_document_superseded_mid_rebuild_is_dropped_from_the_page() -> Result<(), DocumentError> {
+    let path = scratch();
+    remove(&path);
+
+    let moved = {
+        let engine = SqliteEngine::open(&path)?;
+        let conn = Connection::open(engine, records![v1::Note]).await?;
+        let mut filed = Vec::new();
+        for slug in ["one", "two", "three"] {
+            filed.push(
+                conn.insert(v1::Note {
+                    slug: slug.to_string(),
+                    shelf: "left".to_string(),
+                })
+                .await?
+                .id(),
+            );
+        }
+        filed[1]
+    };
+
+    let engine = Interpose::new(SqliteEngine::open(&path)?, moved);
+    let conn = Connection::open(engine, records![v2::Note]).await?;
+
+    let found = v2::Note::query(&conn)
+        .by_shelf("left".to_string())
+        .limit(10)
+        .get_many()
+        .await?;
+
+    assert_eq!(
+        found.len(),
+        2,
+        "the two whose revisions were still live were filed"
+    );
+    assert!(
+        !found.iter().any(|note| note.id() == moved),
+        "no row was filed for a revision that stopped being current"
+    );
 
     remove(&path);
     Ok(())

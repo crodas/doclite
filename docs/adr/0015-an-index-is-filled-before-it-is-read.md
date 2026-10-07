@@ -71,11 +71,15 @@ from and a rebuild needs the type. `Connection::over` still takes schemas and
 refuses to open when something needs filling, which is the honest answer for a
 handle that cannot fill anything.
 
-An abandoned rebuild is an error rather than a wait. A `Spawner` may drop the
-work, and the reads parked on an index nothing will now fill answer
-`DocumentError::Rebuilding`. That is why the gate keeps abandonment as a state
-of its own: removing the entry would read as filled, and a read would then
-answer out of an index with rows missing.
+A rebuild that does not finish is an error rather than a wait, and the gate
+keeps three reasons apart because a reader is owed the reason and not only the
+fact. A `Spawner` may drop the work, and the reads parked on an index nothing
+will now fill answer `DocumentError::Rebuilding`. A rebuild that was refused
+answers with the refusal instead, so a taken unique key reads the same whether
+the fill ran inside `Connection::open` or on a spawner; collapsing the two is
+what made one of those doors misreport the other's failure. Neither removes the
+entry, because an absent one reads as filled and a read would then answer out of
+an index with rows missing.
 
 A `#[unique]` index declared over existing data may already hold two of a key,
 because an index carries no constraint (ADR 0001). The fill claims every unique
@@ -94,6 +98,17 @@ The refusal is narrower: the generated index missing rows while an index derived
 from it is not. Nothing here produces that and nothing here can undo it, since
 the rows that would say which revisions are live are the ones that are gone.
 ADR 0010 refuses an envelope it cannot read for the same reason.
+
+**One state is indistinguishable from a new record type and so is not refused.**
+If every index of a type the store does hold records of were dropped out of
+band, that is the same evidence a new type presents: an empty generated index on
+a store holding objects. Telling them apart needs the objects of that type
+enumerated, and the read seam answers scans and point lookups only, so there is
+no question to ask. A rebuild takes it as a new type, files nothing, and records
+the indexes complete, which leaves those records unfindable and forecloses a
+later retry. Nothing in this crate drops an index table, so reaching it means
+something else edited the database. It is written down because the consequence
+is quiet, which is the one thing the rest of this design refuses to be.
 
 `Store::define` answers a `Defined` too. Nothing a `MemoryStore` holds outlives
 the process, so `Defined::ready` is the truth there rather than a convenient

@@ -116,6 +116,13 @@ Small, real, and each one already written down where it bites.
   reported and nothing to walk, which is ordinary; the generated index missing
   rows while an index derived from it is not is refused as
   `DocumentError::MissingLatest`. Nothing in the crate produces that state.
+- **Every index of a type dropped at once reads as a new type.** Both present an
+  empty generated index on a store holding objects, and separating them needs
+  the objects of that type enumerated, which `Engine::read` cannot be asked for.
+  The rebuild files nothing and records them complete, so those records stay
+  unfindable and no later open retries. Reaching it means something outside this
+  crate edited the database, and it is the one failure here that is quiet rather
+  than loud. ADR 0015.
 - **One contention test has failed once.** `one_writer_takes_the_key` failed
   during a full parallel run and did not reproduce across eleven later runs. The
   cause is unverified. The plausible candidate is the retry loop exhausting its

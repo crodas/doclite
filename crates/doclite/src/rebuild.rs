@@ -57,6 +57,25 @@ pub(crate) async fn drive<E: Engine>(
     records: &Records,
     mut building: Building,
 ) -> Result<(), DocumentError> {
+    match fill(shared, records, &mut building).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            building.failed(&error);
+            Err(error)
+        }
+    }
+}
+
+/// Fills every outstanding index, or stops at the first refusal.
+///
+/// Split from [`drive`] so recording the refusal is not something a caller has
+/// to remember: a rebuild handed to a spawner reports through the gate and
+/// nowhere else, because nothing is waiting on its return value.
+async fn fill<E: Engine>(
+    shared: &Shared<E>,
+    records: &Records,
+    building: &mut Building,
+) -> Result<(), DocumentError> {
     for held in records.types() {
         let wanted = outstanding(held.as_ref(), shared.db.building());
         if wanted.is_empty() {

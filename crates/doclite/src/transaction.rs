@@ -107,7 +107,7 @@ impl<'a, E: Engine, C: Clock> Transaction<'a, E, C> {
             return Ok(());
         }
 
-        match self.connection.gated(&self.operation).await? {
+        match self.connection.db().run(&self.operation).await? {
             Outcome::Committed(()) => Ok(()),
             Outcome::Aborted(code) => Err(self
                 .staged

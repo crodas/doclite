@@ -122,6 +122,11 @@ impl<E: Engine, C: Clock> Connection<E, C> {
 
     /// [`Connection::spawning`] against a clock and node of the caller's
     /// choosing.
+    ///
+    /// A refusal from the rebuild is dropped here rather than returned, because
+    /// nothing awaits this future. It is not lost: `drive` records it on the
+    /// gate first, so a read of the index that could not be filled answers with
+    /// that refusal rather than with a rebuild having gone away.
     pub async fn spawning_with_clock<S: Spawner>(
         engine: E,
         records: Records,
@@ -144,7 +149,7 @@ impl<E: Engine, C: Clock> Connection<E, C> {
             let held = held;
             match rebuild::drive(&shared, &records, held).await {
                 Ok(()) => {}
-                Err(_refused) => {}
+                Err(_recorded) => {}
             }
         }));
         Ok(connection)
@@ -181,11 +186,18 @@ impl<E: Engine, C: Clock> Connection<E, C> {
     /// row into an index that is still being filled is safe, and asserting
     /// against one is not. Every method on this type goes through here, which
     /// is what makes that one decision rather than one per method.
+    ///
+    /// The gate is asked whether it could hold anything back before the list of
+    /// indexes is built, because a store whose indexes are all filled is the
+    /// ordinary case and should pay a relaxed load rather than a lock and an
+    /// allocation on every operation it ever runs.
     pub(crate) async fn gated<R: Reads<E>>(
         &self,
         work: &R,
     ) -> Result<Outcome<R::Output>, DocumentError> {
-        self.shared.gate.clear(&work.reads()).await?;
+        if self.shared.gate.armed() {
+            self.shared.gate.clear(&work.reads()).await?;
+        }
         Ok(self.shared.db.run(work).await?)
     }
 
