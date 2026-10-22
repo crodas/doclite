@@ -107,6 +107,7 @@ macro_rules! conformance {
                 a_catalog_that_names_an_index_twice_is_refused,
                 a_fresh_engine_owes_no_rows,
                 an_index_reported_rebuilt_is_accepted,
+                an_index_reported_rebuilt_is_not_named_again,
             ],
         }
     };

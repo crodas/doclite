@@ -54,16 +54,53 @@ pub async fn a_fresh_engine_owes_no_rows<F: Fresh>() -> Result<(), Failure> {
     )
 }
 
-/// Saying an index is filled is accepted, and saying it of one nobody declared
-/// is named rather than ignored.
+/// Saying an index is filled is accepted, and saying it twice is not an error.
 ///
 /// Defaulted to doing nothing for an engine that keeps no state, which is why
-/// the first half asserts only that it is not an error.
+/// this asserts only that neither call is refused.
 pub async fn an_index_reported_rebuilt_is_accepted<F: Fresh>() -> Result<(), Failure> {
     let engine = &open::<F>().await?;
     engine.rebuilt(BY_EMAIL.id()).await?;
     engine.rebuilt(BY_EMAIL.id()).await?;
     Ok(())
+}
+
+/// An index reported filled is not named again, which is what makes a rebuild
+/// happen once rather than on every open.
+///
+/// The first declaration is one index on a store with nothing in it, and the
+/// object filed after it is what gives the second declaration some history to
+/// be behind. Whatever that second call names is reported filled, so the third
+/// must name nothing. An engine that keeps nothing across a restart names
+/// nothing at either call and passes without being asked anything, which is
+/// the truthful outcome rather than a skipped one; one that keeps its rows and
+/// loses what it was told rebuilds everything on every open while answering
+/// each query correctly, so this is the only place it is visible.
+pub async fn an_index_reported_rebuilt_is_not_named_again<F: Fresh>() -> Result<(), Failure> {
+    let engine = F::fresh().await?;
+    let empty = engine.define(&[BY_EMAIL.schema()]).await?;
+    expect(
+        empty.is_ready(),
+        format!(
+            "a store with nothing in it owes nothing, and this one named {:?}",
+            empty.indexes()
+        ),
+    )?;
+    commit(&engine, &[], &[(ObjectId(1), b"one".to_vec())], &[], &[]).await?;
+
+    let building = engine.define(&schemas()).await?;
+    for index in building.indexes() {
+        engine.rebuilt(*index).await?;
+    }
+
+    let again = engine.define(&schemas()).await?;
+    expect(
+        again.is_ready(),
+        format!(
+            "every index it named was reported filled, and it still names {:?}",
+            again.indexes()
+        ),
+    )
 }
 
 /// A scan answers in the index's own order: columns, then object id.

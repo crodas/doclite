@@ -11,7 +11,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/crodas/doclite"
@@ -25,9 +25,9 @@ readme = "README.md"
 missing_docs = "deny"
 
 [workspace.dependencies]
-doclite-core = { path = "crates/doclite-core", version = "0.1.0" }
-doclite-derive = { path = "crates/doclite-derive", version = "0.1.0" }
-doclite-store = { path = "crates/doclite-store", version = "0.1.0" }
+doclite-core = { path = "crates/doclite-core", version = "0.2.0" }
+doclite-derive = { path = "crates/doclite-derive", version = "0.2.0" }
+doclite-store = { path = "crates/doclite-store", version = "0.2.0" }
 syn = { version = "2.0", features = ["full"] }
 quote = "1.0"
 proc-macro2 = "1.0"

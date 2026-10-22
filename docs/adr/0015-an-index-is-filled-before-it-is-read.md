@@ -110,10 +110,14 @@ later retry. Nothing in this crate drops an index table, so reaching it means
 something else edited the database. It is written down because the consequence
 is quiet, which is the one thing the rest of this design refuses to be.
 
-`Store::define` answers a `Defined` too. Nothing a `MemoryStore` holds outlives
-the process, so `Defined::ready` is the truth there rather than a convenient
-default, and the persistent stores ADR 0011 names as the reason that seam exists
-have somewhere to be honest.
+`Store::define` answers a `Defined` too, and `Store::rebuilt` is what records
+one as filled. Nothing a `MemoryStore` holds outlives the process, so
+`Defined::ready` is the truth there rather than a convenient default, and the
+persistent stores ADR 0011 names as the reason that seam exists have somewhere
+to be honest. `rebuilt` is required there rather than defaulted as it is on
+`Engine`, because those stores are the rule at that seam and not the exception:
+one with nowhere to record a fill reports the same index building on every open
+for ever, and answers every query correctly while doing it.
 
 **What `define` answers is not a hint.** ADR 0004's table is about what an
 engine is told, and ignoring a hint widens what comes back. An engine cannot

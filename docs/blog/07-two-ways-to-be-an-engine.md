@@ -25,8 +25,8 @@ however you like. Everything about what a batch means is yours, which is what
 lets a store with a query language answer in a statement. SQLite and Postgres
 go here.
 
-**`Store`** is the narrow one. Define an index, answer reads, and hand out a
-`Region`. `doclite-store` supplies the rest, and `StoreEngine` is what turns one
+**`Store`** is the narrow one. Define an index, record one as filled, answer
+reads, and hand out a `Region`. `doclite-store` supplies the rest, and `StoreEngine` is what turns one
 into an `Engine`.
 
 ## The narrow seam
@@ -35,13 +35,14 @@ into an `Engine`.
 pub trait Store: Send + Sync {
     type Region<'a>: Region where Self: 'a;
 
-    fn define(&self, indexes: &[IndexSchema]) -> Result<(), StorageError>;
+    fn define(&self, indexes: &[IndexSchema]) -> Result<Defined, StorageError>;
+    fn rebuilt(&self, index: IndexId) -> Result<(), StorageError>;
     fn read(&self, reads: &Reads<'_>) -> Result<Answers, StorageError>;
     fn exclusive(&self) -> Result<Self::Region<'_>, StorageError>;
 }
 ```
 
-Three methods, all synchronous. That is deliberate: the substrates this is for,
+Four methods, all synchronous. That is deliberate: the substrates this is for,
 an in-process map, RocksDB, sled, redb, are synchronous, and ADR 0006 put the
 async at the engine seam where it belongs. A store that waits on a network
 should implement `Engine` directly.

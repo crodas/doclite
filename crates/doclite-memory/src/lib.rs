@@ -107,6 +107,13 @@ impl Store for MemoryStore {
         Ok(Defined::ready())
     }
 
+    /// Nothing here is ever reported building, so nothing is ever reported
+    /// filled. Written out because the seam does not default it: a store that
+    /// keeps nothing says so rather than by omission.
+    fn rebuilt(&self, _index: IndexId) -> Result<(), StorageError> {
+        Ok(())
+    }
+
     fn read(&self, reads: &Reads<'_>) -> Result<Answers, StorageError> {
         let state = self.state.read().map_err(|_| StorageError::Poisoned)?;
         let mut answers = Answers {

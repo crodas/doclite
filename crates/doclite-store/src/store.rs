@@ -32,6 +32,16 @@ pub trait Store: Send + Sync {
     /// notice a declaration it has no complete set of rows for.
     fn define(&self, indexes: &[IndexSchema]) -> Result<Defined, StorageError>;
 
+    /// Records that an index [`Store::define`] named now holds every row it
+    /// should, so a later open does not fill it again.
+    ///
+    /// Required rather than defaulted, unlike
+    /// [`Engine::rebuilt`](doclite_core::Engine::rebuilt): the stores this
+    /// seam exists for are the ones that keep their rows, and one with nowhere
+    /// to record a fill reports the same index building on every open for
+    /// ever while answering every query correctly.
+    fn rebuilt(&self, index: IndexId) -> Result<(), StorageError>;
+
     /// Answers every scan and every object from one consistent view.
     ///
     /// The range and the limit on a scan are hints: answering with more costs

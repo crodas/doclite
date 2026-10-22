@@ -7,7 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Before 1.0 a minor bump is where a breaking change goes.
 
-## Unreleased
+## 0.2.0 - 2026-10-22
 
 ### Added
 
@@ -38,16 +38,21 @@ Before 1.0 a minor bump is where a breaking change goes.
 - **`Connection::open` takes `Records` rather than `&[IndexSchema]`.** Breaking.
   `records![T]` is the replacement at a call site, and `Connection::over` is the
   schemas-only door.
+- **`Store::rebuilt` is a required method.** Breaking for anyone implementing
+  that seam. A store is the only place a previous run's shape was written down,
+  so it is the only place that can record a fill. Defaulted, a store could
+  report an index building on every open with nowhere to say one finished,
+  which is a rebuild that never stops and never complains. `MemoryStore` keeps
+  nothing across a process, so its answer is that there is nothing to write
+  down.
 - **An index whose shape moved is rebuilt rather than refused.** `docs/sqlite.md`
   said an arity change was a migration and not a definition. ADR 0015 reverses
   that, and ADR 0001 is why it is safe. An existing database is not rebuilt on
   first open: an index table with no recorded shape is taken as complete.
 
-## 0.1.0 - 2026-09-05
+## 0.1.0 - 2026-09-06
 
-First release, so there is no upgrade path to describe. The date is the day the
-tree was made ready; move it if the upload slips, because a changelog dated
-before what it describes is worse than one with no date at all.
+First release, so there is no upgrade path to describe.
 
 ### Added
 

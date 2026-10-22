@@ -62,13 +62,20 @@ The index takes a moment to catch up after an upload. The next crate's dry-run
 can fail on a dependency that was published seconds earlier, and that is the
 index lagging rather than anything being wrong. Wait and run it again.
 
-Only `doclite-core` and `doclite-derive` can be dry-run before a first release
-has happened at all. The other five resolve path dependencies that are not on
-crates.io yet, so their dry-run fails for the same reason a real publish out of
-order would. `cargo package --list -p <crate>` is what can be checked ahead of
-time, and it is what confirms `LICENSE` and `README.md` land in every `.crate`.
-CI's `package` job runs exactly that over all seven, so this one is answered on
-every push rather than remembered at release time.
+Only `doclite-core` and `doclite-derive` can be dry-run before the rest of a
+release is uploaded. This is true of every release and not only the first: a
+dry-run builds the package with the path stripped, so the other five resolve the
+version the workspace pins against an index that does not hold it yet, and fail
+for the same reason a real publish out of order would.
+
+`cargo publish --dry-run --no-verify -p <crate>` does work mid-release. It
+packages the crate and checks the manifest without compiling it, which is the
+cheapest thing that answers whether a manifest is publishable at all.
+
+`cargo package --list -p <crate>` is the other thing that can be checked ahead
+of time, and it is what confirms `LICENSE` and `README.md` land in every
+`.crate`. CI's `package` job runs exactly that over all seven, so this one is
+answered on every push rather than remembered at release time.
 
 ## What a dry-run does not check
 
@@ -80,6 +87,12 @@ never looks. Check every `categories` entry against
 published manifest. That is why `doclite` can dev-depend on `doclite-memory`
 without a cycle in the publish order, and also why the doctests that reach for
 `doclite_memory` do not run on docs.rs.
+
+## Tags
+
+A release is tagged `v<version>` at the commit that was uploaded, annotated and
+unsigned. The tag is pushed after the last crate lands, so one never names a
+tree that failed to publish.
 
 ## Version numbers
 

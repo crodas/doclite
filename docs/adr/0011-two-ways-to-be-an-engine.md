@@ -26,8 +26,10 @@ Two seams, and a backend picks the one that matches what it has.
 `Engine` is unchanged: `define`, `read`, `apply`, async as ADR 0006 put it.
 Everything about what a batch means stays the implementer's.
 
-`Store` is the narrow one. `define` declares a home per index, `read` answers
-every scan and object from one view, and `exclusive` hands out a `Region`.
+`Store` is the narrow one. `define` declares a home per index and says which
+of them has rows missing, `rebuilt` records that one of those is filled, `read`
+answers every scan and object from one view, and `exclusive` hands out a
+`Region`.
 `StoreEngine<S>` wears the engine seam over it, and the batch protocol lives
 behind that and nowhere else, as `admits` and `commit`.
 

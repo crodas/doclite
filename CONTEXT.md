@@ -126,7 +126,8 @@ answers what it had to build, which is not a hint in ADR 0004's sense: an
 engine cannot ignore its own answer.
 
 **Store.** The narrow seam, for a substrate that keeps ordered rows and nothing
-more. Define an index, answer reads, and hand out a **Region**. `StoreEngine`
+more. Define an index, record one as filled, answer reads, and hand out a
+**Region**. `StoreEngine`
 supplies the rest and is what turns one into an `Engine`. Synchronous, because
 an in-process map and the embedded key-value stores are; the async stays at the
 engine seam where ADR 0006 put it.

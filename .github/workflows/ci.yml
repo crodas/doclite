@@ -88,8 +88,9 @@ jobs:
 
       - run: cargo +1.82 check --workspace --all-targets --all-features
 
-  # What `cargo publish --dry-run` cannot answer before a first release: that
-  # every crate carries its license and its readme. See docs/releasing.md.
+  # What `cargo publish --dry-run` cannot answer until the rest of a release is
+  # uploaded: that every crate carries its license and its readme. See
+  # docs/releasing.md.
   package:
     runs-on: ubuntu-latest
     steps:

@@ -1,7 +1,9 @@
 //! The adapter: a store, wearing the engine seam.
 
 use async_trait::async_trait;
-use doclite_core::{Answers, Applied, Batch, Defined, Engine, IndexSchema, Reads, StorageError};
+use doclite_core::{
+    Answers, Applied, Batch, Defined, Engine, IndexId, IndexSchema, Reads, StorageError,
+};
 
 use crate::admit::Admission;
 use crate::store::Store;
@@ -50,6 +52,12 @@ impl<S: Store> Engine for StoreEngine<S> {
         self.0.define(indexes)
     }
 
+    /// Forwarded rather than left to the default, because the record has to
+    /// outlive the process and a `StoreEngine` holds nothing but the store.
+    async fn rebuilt(&self, index: IndexId) -> Result<(), StorageError> {
+        self.0.rebuilt(index)
+    }
+
     async fn read(&self, reads: &Reads<'_>) -> Result<Answers, StorageError> {
         self.0.read(reads)
     }
@@ -68,5 +76,91 @@ impl<S: Store> Engine for StoreEngine<S> {
         }
         admission.commit();
         Ok(Applied::Committed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use doclite_core::{KeyRange, ObjectId, Row};
+
+    use super::*;
+    use crate::store::Region;
+
+    const ONE: IndexId = IndexId("one");
+
+    /// A store that answers only the two questions this test is about.
+    ///
+    /// What a batch means is `admit.rs`'s to prove, so the region refuses every
+    /// read rather than pretending to hold rows.
+    #[derive(Default)]
+    struct Recording {
+        filled: AtomicBool,
+    }
+
+    impl Store for Recording {
+        type Region<'a> = Nowhere;
+
+        fn define(&self, _indexes: &[IndexSchema]) -> Result<Defined, StorageError> {
+            match self.filled.load(Ordering::Relaxed) {
+                true => Ok(Defined::ready()),
+                false => Ok(Defined::building(vec![ONE])),
+            }
+        }
+
+        fn rebuilt(&self, _index: IndexId) -> Result<(), StorageError> {
+            self.filled.store(true, Ordering::Relaxed);
+            Ok(())
+        }
+
+        fn read(&self, _reads: &Reads<'_>) -> Result<Answers, StorageError> {
+            Ok(Answers {
+                scans: Vec::new(),
+                objects: Vec::new(),
+            })
+        }
+
+        fn exclusive(&self) -> Result<Self::Region<'_>, StorageError> {
+            Ok(Nowhere)
+        }
+    }
+
+    struct Nowhere;
+
+    impl Region for Nowhere {
+        fn arity(&self, index: IndexId) -> Result<usize, StorageError> {
+            Err(StorageError::UnknownIndex(index))
+        }
+
+        fn rows(&self, index: IndexId, _range: &KeyRange) -> Result<Vec<Row>, StorageError> {
+            Err(StorageError::UnknownIndex(index))
+        }
+
+        fn has_object(&self, _id: ObjectId) -> Result<bool, StorageError> {
+            Ok(false)
+        }
+
+        fn delete(&mut self, _index: IndexId, _range: &KeyRange) {}
+
+        fn put_object(&mut self, _id: ObjectId, _bytes: Vec<u8>) {}
+
+        fn put_row(&mut self, _index: IndexId, _row: Row) {}
+    }
+
+    /// A `StoreEngine` keeps nothing, so the store underneath has to be the
+    /// thing told a fill happened. Leaving the forward out compiles, because
+    /// `Engine::rebuilt` is defaulted, and the store then reports the same
+    /// index on every open for ever.
+    #[tokio::test]
+    async fn a_fill_reaches_the_store_underneath() -> Result<(), StorageError> {
+        let engine = StoreEngine::over(Recording::default());
+
+        let building = engine.define(&[]).await?;
+        assert_eq!(building.indexes(), [ONE]);
+
+        engine.rebuilt(ONE).await?;
+        assert!(engine.define(&[]).await?.is_ready());
+        Ok(())
     }
 }

@@ -1,45 +1,14 @@
 # Roadmap
 
-What is left before 0.1.0 goes out, and what 0.2.0 is for. Every item here is
-something the code or the documents already point at, so a claim in this file
-can be traced rather than taken.
+What 0.3.0 is for, and what is absent on purpose. Every item here is something
+the code or the documents already point at, so a claim in this file can be
+traced rather than taken.
 
 Like the ADRs, this is a living document. An item is deleted when it is done
 rather than ticked, because a roadmap of finished work is a changelog and there
 is already one of those.
 
-## 0.1.0
-
-The work is finished. Everything in `docs/releasing.md` passes: formatting, the
-lint gate, the suite with every feature and with none, the documentation build,
-the minimum toolchain, and the packaging check that says every crate ships its
-licence and its readme. Both crates that can be dry-run before a first release
-dry-run cleanly, every crate name is free, and every category slug resolves.
-
-One thing stands in the way.
-
-### The repository URL does not resolve
-
-Every manifest names a repository that answers 404, and the checkout has no
-remote, so the workflow in `.github/workflows/ci.yml` has never run once. All
-seven crates would publish with a dead link on their crates.io page.
-
-Publishing is not the first irreversible step here. A crate version cannot be
-taken back, and the first upload is what fixes the repository URL in the index
-for that version forever. So: create the repository, push, watch CI go green on
-a machine that is not this one, and only then upload.
-
-### Two branches survive that `main` cannot reach
-
-The `master` and `sqlite-engine` branches point at the history that existed
-before it was collapsed into one commit. They share no merge base with `main`,
-so `git diff` against either fails outright.
-
-They are the only refs holding that history, which makes them a real backup and
-a real confusion. Decide which before the repository is pushed, because pushing
-publishes the answer.
-
-## 0.2.0
+## 0.3.0
 
 None of this blocks a release. Each item is a thing the design already names as
 deferred, or a gap that only shows up once somebody else is using the crate.
@@ -80,10 +49,12 @@ Writing one is the cheapest way to find out whether `Store` and `Region` are the
 right size, and the conformance suite means the new backend arrives with its
 correctness argument already written.
 
-`Store::define` answers a `Defined`, so a store that keeps its rows has
-somewhere to say which indexes it has no complete set of them for. The in-process
-map answers `Defined::ready` truthfully because nothing it holds outlives the
-process; a persistent one is the first that will have to mean it.
+`Store::define` answers a `Defined` and `Store::rebuilt` records one as
+filled, so a store that keeps its rows has somewhere to say which indexes it
+has no complete set of rows for, and somewhere to say when it does. The
+in-process map answers `Defined::ready` truthfully because nothing it holds
+outlives the process; a persistent one is the first that will have to mean
+both.
 
 ### Decide `#[non_exhaustive]` before 1.0
 
@@ -96,6 +67,18 @@ every downstream `match` into a catch-all arm, which is exactly the pattern
 this project's own hygiene rules ban. Both positions are defensible, which is
 why this should be a decision with a date rather than an omission nobody
 revisits.
+
+## History that only exists here
+
+Three branches point at the history that existed before it was collapsed into
+one commit: `master` (a5e016a), `sqlite-engine` (600fc7e) and
+`feature/index-versioning` (2d51e5d). None shares a merge base with `main`, so
+`git diff` against any of them fails outright.
+
+They are kept on the machine the work happens on and are not pushed, so the
+published repository is the single line `main` describes. That makes them a
+backup of exactly one copy, which is the cost of keeping the published history
+clean.
 
 ## Known sharp edges
 
