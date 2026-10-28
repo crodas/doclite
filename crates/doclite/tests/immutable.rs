@@ -15,8 +15,8 @@
 use doclite::doclite_core::{all, Index, Key, ObjectId, Outcome, Query};
 use doclite::id::EPOCH_MS;
 use doclite::{
-    records, Column, Connection, Document, DocumentError, DocumentId, FixedClock, NodeId, Record,
-    RevisionId, Rows, Stored, Timestamp,
+    records, Column, Connection, Document, DocumentError, DocumentId, Filing, FixedClock, NodeId,
+    Record, RevisionId, Rows, Stored, Timestamp,
 };
 use serde::{Deserialize, Serialize};
 
@@ -55,7 +55,7 @@ struct Note {
 
 /// Records what a record's walk yields, so a test can read it.
 #[derive(Default)]
-struct Walk(Vec<(&'static str, bool)>);
+struct Walk(Vec<(&'static str, Filing)>);
 
 impl Rows for Walk {
     fn row<const N: usize>(
@@ -63,9 +63,9 @@ impl Rows for Walk {
         _index: &Index<N>,
         _key: Key<N>,
         name: &'static str,
-        unique: bool,
+        filing: Filing,
     ) {
-        self.0.push((name, unique));
+        self.0.push((name, filing));
     }
 }
 
@@ -168,9 +168,9 @@ async fn an_immutable_record_is_filed_under_the_generated_index_like_any_other<U
     assert_eq!(
         walk.0,
         [
-            ("entry_latest", false),
-            ("entry_by_slug", true),
-            ("entry_by_account", false),
+            ("entry_latest", Filing::Latest),
+            ("entry_by_slug", Filing::Unique),
+            ("entry_by_account", Filing::Plain),
         ],
         "the same walk an amendable record does"
     );
@@ -216,6 +216,6 @@ fn immutability_changes_nothing_about_what_a_record_declares() {
     }
     .rows(document, revision, &mut amendable);
 
-    let shape = |walk: &Walk| -> Vec<bool> { walk.0.iter().map(|(_, unique)| *unique).collect() };
+    let shape = |walk: &Walk| -> Vec<Filing> { walk.0.iter().map(|(_, filing)| *filing).collect() };
     assert_eq!(shape(&immutable), shape(&amendable));
 }

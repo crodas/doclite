@@ -91,8 +91,15 @@ impl IndexSpec {
         &self.types
     }
 
-    pub(crate) fn unique(&self) -> bool {
-        self.kind == Kind::Unique
+    /// Which `Filing` a walk is handed for this index, which is what decides
+    /// whether its row is claimed, and whether it is retired.
+    pub(crate) fn filing(&self) -> TokenStream {
+        match self.kind {
+            Kind::Latest => quote!(::doclite::Filing::Latest),
+            Kind::Plain => quote!(::doclite::Filing::Plain),
+            Kind::Unique => quote!(::doclite::Filing::Unique),
+            Kind::Feed => quote!(::doclite::Filing::Feed),
+        }
     }
 
     /// Whether this is the index the macro writes rather than one asked for.
@@ -206,12 +213,12 @@ impl IndexSpec {
     pub(crate) fn files(&self, record: &Ident) -> TokenStream {
         let constant = self.constant();
         let name = self.name(record);
-        let unique = self.unique();
+        let filing = self.filing();
 
         if !self.many {
             let key = self.key_of();
             return quote! {
-                into.row(&#record::#constant, #key, #name, #unique);
+                into.row(&#record::#constant, #key, #name, #filing);
             };
         }
 
@@ -222,7 +229,7 @@ impl IndexSpec {
                     &#record::#constant,
                     ::doclite::doclite_core::key![owner.clone(), revision, document],
                     #name,
-                    #unique,
+                    #filing,
                 );
             }
         }
@@ -455,8 +462,8 @@ mod tests {
         let feed = spec(&["account"], Kind::Feed);
         assert!(feed.feed());
         assert!(!feed.generated());
-        assert!(!feed.unique());
         assert!(!IndexSpec::latest().feed());
+        assert_eq!(feed.filing().to_string(), ":: doclite :: Filing :: Feed");
     }
 
     #[test]

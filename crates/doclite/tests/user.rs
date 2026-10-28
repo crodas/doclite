@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use doclite::id::{minted_at, EPOCH_MS};
 use doclite::{
-    greater_than, records, Clock, Column, Connection, Document, DocumentError, DocumentId,
+    greater_than, records, Clock, Column, Connection, Document, DocumentError, DocumentId, Filing,
     FixedClock, NodeId, Record, Revision, RevisionId, Timestamp,
 };
 use serde::{Deserialize, Serialize};
@@ -44,7 +44,7 @@ struct User {
 
 /// Records what a record's walk yields, so a test can read it.
 #[derive(Default)]
-struct Walk(Vec<(&'static str, bool)>);
+struct Walk(Vec<(&'static str, Filing)>);
 
 impl doclite::Rows for Walk {
     fn row<const N: usize>(
@@ -52,9 +52,9 @@ impl doclite::Rows for Walk {
         _index: &doclite::doclite_core::Index<N>,
         _key: doclite::doclite_core::Key<N>,
         name: &'static str,
-        unique: bool,
+        filing: Filing,
     ) {
-        self.0.push((name, unique));
+        self.0.push((name, filing));
     }
 }
 
@@ -159,10 +159,10 @@ async fn the_derive_makes_the_indexes_the_attributes_asked_for<U: Under>(
     assert_eq!(
         walked.0,
         [
-            ("user_latest", false),
-            ("user_by_email", true),
-            ("user_by_age", false),
-            ("user_by_country_city_state", false),
+            ("user_latest", Filing::Latest),
+            ("user_by_email", Filing::Unique),
+            ("user_by_age", Filing::Plain),
+            ("user_by_country_city_state", Filing::Plain),
         ],
         "one row per index, and only the caller's own is unique"
     );

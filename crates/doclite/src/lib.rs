@@ -152,7 +152,7 @@ pub use crate::error::DocumentError;
 pub use crate::id::{IdError, IdSource, NodeId, Snowflake};
 pub use crate::identity::{DocumentId, Ref, RevisionId};
 pub use crate::query::{scan_between, scan_prefix, scan_within, Selection};
-pub use crate::record::{Amendable, Only, Record, Rows};
+pub use crate::record::{Amendable, Filing, Only, Record, Rows};
 pub use crate::records::Records;
 pub use crate::revision::{Revision, Stored};
 pub use crate::spawn::Spawner;

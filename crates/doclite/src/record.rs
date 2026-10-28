@@ -147,21 +147,38 @@ pub trait Record: ToStorage + FromStorage + Clone + Send + Sync + Sized {
 /// ```
 pub trait Amendable {}
 
+/// What an index a record is filed under is for.
+///
+/// An index carries no rule of its own (ADR 0001), so what a walk does with
+/// one of its rows is decided here: a claim is asserted on a unique key and
+/// nowhere else, and a feed row is kept where every other row is retired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Filing {
+    /// The generated index, one row per live record.
+    Latest,
+    /// `#[index]`. Many rows may share the key.
+    Plain,
+    /// `#[unique]`. An insert asserts the key is free.
+    Unique,
+    /// `#[owner]`. One row per revision, and never retired.
+    Feed,
+}
+
 /// What a walk of a record's index rows is handed, once per index.
 ///
 /// `row` is generic over the width rather than taking a slice of columns,
 /// because a `Key<N>` is an array and an `Operation` will not file an index row
 /// whose arity it cannot see at compile time.
 pub trait Rows {
-    /// Called once per row the record belongs in. `unique` and `name` are what
-    /// a duplicate is refused and named by, since an index itself carries no
-    /// rule.
+    /// Called once per row the record belongs in. `filing` and `name` are what
+    /// a duplicate is refused and named by, and what tells a retiring walk the
+    /// one row it must leave alone.
     fn row<const N: usize>(
         &mut self,
         index: &Index<N>,
         key: Key<N>,
         name: &'static str,
-        unique: bool,
+        filing: Filing,
     );
 }
 
@@ -192,10 +209,10 @@ impl<R: Rows> Rows for Only<'_, R> {
         index: &Index<N>,
         key: Key<N>,
         name: &'static str,
-        unique: bool,
+        filing: Filing,
     ) {
         if self.wanted.contains(&index.id()) {
-            self.into.row(index, key, name, unique);
+            self.into.row(index, key, name, filing);
         }
     }
 }

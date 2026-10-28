@@ -17,7 +17,7 @@ use doclite_core::{exact, key, AbortCode, Index, IndexId, Key, Operation};
 
 use crate::error::DocumentError;
 use crate::identity::{DocumentId, RevisionId};
-use crate::record::{Codes, Only, Reason, Record, Rows};
+use crate::record::{Codes, Filing, Only, Reason, Record, Rows};
 use crate::revision::Revision;
 
 /// An operation and the names that turn its abort codes back into a reason.
@@ -207,7 +207,11 @@ fn require_current<T: Record>(
     )
 }
 
-/// Retires the row this value holds in every index.
+/// Retires the row this value holds in every index but its feed.
+///
+/// A feed row is what happened rather than what is current, so retiring one
+/// would erase the change it records. It is the one row an update leaves where
+/// it is, which is why an owner's rows accumulate and nothing else's do.
 struct Retire(Operation);
 
 impl Retire {
@@ -229,8 +233,11 @@ impl Rows for Retire {
         index: &Index<N>,
         key: Key<N>,
         _name: &'static str,
-        _unique: bool,
+        filing: Filing,
     ) {
+        if filing == Filing::Feed {
+            return;
+        }
         let op = std::mem::replace(&mut self.0, Operation::new());
         self.0 = op.delete_index(index, exact(key));
     }
@@ -258,7 +265,7 @@ impl Rows for File {
         index: &Index<N>,
         key: Key<N>,
         _name: &'static str,
-        _unique: bool,
+        _filing: Filing,
     ) {
         let op = std::mem::replace(&mut self.0, Operation::new());
         self.0 = op.put_index(index, key, self.1);
@@ -297,9 +304,9 @@ impl Rows for Claim {
         index: &Index<N>,
         key: Key<N>,
         name: &'static str,
-        unique: bool,
+        filing: Filing,
     ) {
-        if !unique {
+        if filing != Filing::Unique {
             return;
         }
         let at = self.claimed.len();
@@ -330,6 +337,10 @@ mod tests {
     const LATEST: Index<2> = Index::typed("note_latest", &[ColumnType::U64, ColumnType::U64]);
     const BY_SLUG: Index<1> = Index::typed("note_by_slug", &[ColumnType::Str]);
     const BY_SHELF: Index<2> = Index::typed("note_by_shelf", &[ColumnType::U8, ColumnType::U64]);
+    const FEED: Index<3> = Index::typed(
+        "note_feed",
+        &[ColumnType::U8, ColumnType::I64, ColumnType::I64],
+    );
 
     doclite_core::serde_storage!(Note);
 
@@ -337,7 +348,12 @@ mod tests {
     /// the macro that expands into it. It is the shape the derive emits.
     impl Record for Note {
         fn schemas() -> Vec<doclite_core::IndexSchema> {
-            vec![LATEST.schema(), BY_SLUG.schema(), BY_SHELF.schema()]
+            vec![
+                LATEST.schema(),
+                BY_SLUG.schema(),
+                BY_SHELF.schema(),
+                FEED.schema(),
+            ]
         }
 
         fn latest() -> Index<2> {
@@ -345,13 +361,29 @@ mod tests {
         }
 
         fn rows<R: Rows>(&self, document: DocumentId, revision: RevisionId, into: &mut R) {
-            into.row(&LATEST, key![document, revision], "note_latest", false);
-            into.row(&BY_SLUG, key![self.slug.clone()], "note_by_slug", true);
+            into.row(
+                &LATEST,
+                key![document, revision],
+                "note_latest",
+                Filing::Latest,
+            );
+            into.row(
+                &BY_SLUG,
+                key![self.slug.clone()],
+                "note_by_slug",
+                Filing::Unique,
+            );
             into.row(
                 &BY_SHELF,
                 key![self.shelf, document],
                 "note_by_shelf",
-                false,
+                Filing::Plain,
+            );
+            into.row(
+                &FEED,
+                key![self.shelf, revision, document],
+                "note_feed",
+                Filing::Feed,
             );
         }
     }
@@ -409,6 +441,7 @@ mod tests {
                 "put object",
                 "put index",
                 "put index",
+                "put index",
                 "put index"
             ],
             "one claim, the revision, and a row per index"
@@ -434,7 +467,10 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(filed, ["note_latest", "note_by_slug", "note_by_shelf"]);
+        assert_eq!(
+            filed,
+            ["note_latest", "note_by_slug", "note_by_shelf", "note_feed"]
+        );
     }
 
     /// The order is not a preference. `require_current` before the deletes, or
@@ -462,7 +498,86 @@ mod tests {
                 "put object",
                 "put index",
                 "put index",
+                "put index",
                 "put index"
+            ],
+            "three rows retired and four filed: the feed row is kept"
+        );
+    }
+
+    /// The one row an update leaves alone. Retiring it would erase the change
+    /// it records, which is the whole of what a feed is for.
+    #[test]
+    fn superseding_retires_every_row_but_the_feed_s() {
+        let write = supersede(
+            &envelope(note("n-1", 2), 7, Some(7)),
+            &note("n-1", 1),
+            document(7),
+            revision(7),
+            revision(9),
+            slot(),
+        );
+
+        let retired: Vec<&str> = write
+            .operation()
+            .steps()
+            .iter()
+            .filter_map(|step| match step {
+                Step::DeleteIndex { index, .. } => Some(index.0),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(retired, ["note_latest", "note_by_slug", "note_by_shelf"]);
+    }
+
+    /// Two revisions, two feed rows, each keyed on the revision that wrote it.
+    /// That is what makes a scan of one owner read in the order things
+    /// happened.
+    #[test]
+    fn a_feed_row_names_the_revision_that_filed_it() {
+        let keys = |write: &Write| -> Vec<Vec<Column>> {
+            write
+                .operation()
+                .steps()
+                .iter()
+                .filter_map(|step| match step {
+                    Step::PutIndex { index, columns, .. } if index.0 == "note_feed" => {
+                        Some(columns.clone())
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+
+        let filed = insert(
+            &envelope(note("n-1", 1), 7, None),
+            document(7),
+            revision(7),
+            slot(),
+        );
+        let edited = supersede(
+            &envelope(note("n-1", 1), 7, Some(7)),
+            &note("n-1", 1),
+            document(7),
+            revision(7),
+            revision(9),
+            slot(),
+        );
+
+        assert_eq!(
+            [keys(&filed), keys(&edited)].concat(),
+            [
+                vec![
+                    Column::encode(&1u8),
+                    Column::encode(&revision(7)),
+                    Column::encode(&document(7)),
+                ],
+                vec![
+                    Column::encode(&1u8),
+                    Column::encode(&revision(9)),
+                    Column::encode(&document(7)),
+                ],
             ]
         );
     }
