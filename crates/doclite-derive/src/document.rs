@@ -38,6 +38,34 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
 
     let rows = specs.iter().map(|spec| spec.files(record));
 
+    let feed = specs.iter().find(|spec| spec.feed()).map(|spec| {
+        let constant = spec.constant();
+        let owner = &spec.fields()[0];
+        let ty = &spec.types()[0];
+        let doc = format!(
+            "Reads `{}` for one owner: a row per revision, oldest first.",
+            spec.name(record)
+        );
+        quote! {
+            #[doc = #doc]
+            pub fn feed<E, C>(
+                conn: &::doclite::Connection<E, C>,
+                #owner: #ty,
+            ) -> ::doclite::Feed<'_, E, C, #record>
+            where
+                E: ::doclite::doclite_core::Engine,
+                C: ::doclite::Clock + ::std::marker::Copy,
+            {
+                ::doclite::Feed::new(
+                    conn,
+                    #record::#constant.id(),
+                    ::doclite::doclite_core::IntoColumn::into_column(#owner),
+                    |spec| ::doclite::feed::scanning(&#record::#constant, spec),
+                )
+            }
+        }
+    });
+
     let builder = format_ident!("{record}Query");
     let methods = specs
         .iter()
@@ -69,6 +97,8 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
             {
                 #builder(::doclite::Selection::new(conn))
             }
+
+            #feed
         }
 
         impl ::doclite::Record for #record {
