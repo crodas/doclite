@@ -27,6 +27,10 @@ pub(crate) enum Kind {
     /// is what makes "is this revision still the current one" a question an
     /// assertion can ask of any record.
     Latest,
+    /// `#[owner]`. One row per revision rather than per record, keyed
+    /// `(owner, revision, document)`, so an owner's changes read in the order
+    /// they happened and a row is never retired.
+    Feed,
 }
 
 /// One index, either asked for by an attribute or written by the macro.
@@ -36,6 +40,9 @@ pub(crate) struct IndexSpec {
     fields: Vec<Ident>,
     types: Vec<Type>,
     kind: Kind,
+    /// Whether the field holds several owners rather than one, which only a
+    /// feed can be.
+    many: bool,
 }
 
 impl IndexSpec {
@@ -45,6 +52,22 @@ impl IndexSpec {
             fields,
             types,
             kind,
+            many: false,
+        }
+    }
+
+    /// The feed one `#[owner]` field declares.
+    ///
+    /// `ty` is what one owner is, which for a field holding several is the
+    /// element rather than the list: the key holds one owner, so a column
+    /// holds one owner, and a feed is read for one owner whichever shape the
+    /// field has.
+    pub(crate) fn owner(field: Ident, ty: Type, many: bool) -> Self {
+        Self {
+            fields: vec![field],
+            types: vec![ty],
+            kind: Kind::Feed,
+            many,
         }
     }
 
@@ -54,6 +77,7 @@ impl IndexSpec {
             fields: Vec::new(),
             types: Vec::new(),
             kind: Kind::Latest,
+            many: false,
         }
     }
 
@@ -76,11 +100,21 @@ impl IndexSpec {
         self.kind == Kind::Latest
     }
 
-    /// `user_by_country_city_state`, or `user_latest`.
+    /// Whether this index accumulates a row per revision rather than holding
+    /// one per record.
+    pub(crate) fn feed(&self) -> bool {
+        self.kind == Kind::Feed
+    }
+
+    /// `user_by_country_city_state`, `user_latest`, or `user_feed`.
     pub(crate) fn name(&self, record: &Ident) -> String {
         let mut name = snake(&record.to_string());
         if self.kind == Kind::Latest {
             name.push_str("_latest");
+            return name;
+        }
+        if self.kind == Kind::Feed {
+            name.push_str("_feed");
             return name;
         }
         name.push_str("_by");
@@ -91,8 +125,11 @@ impl IndexSpec {
         name
     }
 
-    /// `BY_COUNTRY_CITY_STATE`, or `LATEST`.
+    /// `BY_COUNTRY_CITY_STATE`, `LATEST`, or `FEED`.
     pub(crate) fn constant(&self) -> Ident {
+        if self.kind == Kind::Feed {
+            return Ident::new("FEED", Span::call_site());
+        }
         let mut name = String::from(if self.kind == Kind::Latest {
             "LATEST"
         } else {
@@ -112,12 +149,15 @@ impl IndexSpec {
     /// could not be retired without taking every other record that shares its
     /// key. The generated index is `(document, revision)`: the revision has to
     /// be in the key rather than the payload, because an assertion can only
-    /// ever look at key bytes.
+    /// ever look at key bytes. A feed ends in both, the revision first: that
+    /// is what orders an owner's rows by when they happened, and the document
+    /// after it keeps two records revised in one millisecond apart.
     pub(crate) fn arity(&self) -> usize {
         match self.kind {
             Kind::Unique => self.fields.len(),
             Kind::Plain => self.fields.len() + 1,
             Kind::Latest => 2,
+            Kind::Feed => self.fields.len() + 2,
         }
     }
 
@@ -146,27 +186,66 @@ impl IndexSpec {
             .iter()
             .map(|ty| quote!(<#ty as ::doclite::doclite_core::ToOrdBytes>::COLUMN_TYPE))
             .collect();
-        if self.kind == Kind::Plain {
+        if self.kind == Kind::Feed {
+            columns.push(quote! {
+                <::doclite::RevisionId as ::doclite::doclite_core::ToOrdBytes>::COLUMN_TYPE
+            });
+        }
+        if self.kind == Kind::Plain || self.kind == Kind::Feed {
             columns.push(document);
         }
         columns
+    }
+
+    /// The statement a walk runs for this index.
+    ///
+    /// One call per row, which for a field holding several owners is one call
+    /// each: the index does not change shape, a revision just lands in every
+    /// owner's feed. An empty list files nothing, which is what a record with
+    /// no owners means.
+    pub(crate) fn files(&self, record: &Ident) -> TokenStream {
+        let constant = self.constant();
+        let name = self.name(record);
+        let unique = self.unique();
+
+        if !self.many {
+            let key = self.key_of();
+            return quote! {
+                into.row(&#record::#constant, #key, #name, #unique);
+            };
+        }
+
+        let field = &self.fields[0];
+        quote! {
+            for owner in &self.#field {
+                into.row(
+                    &#record::#constant,
+                    ::doclite::doclite_core::key![owner.clone(), revision, document],
+                    #name,
+                    #unique,
+                );
+            }
+        }
     }
 
     /// `key![self.country.clone(), self.city.clone(), document]`.
     ///
     /// A plain index ends in the document rather than the revision, so the key of a
     /// row does not move when the record is superseded and a foreign key written
-    /// against it keeps finding the same rows.
+    /// against it keeps finding the same rows. A feed ends in both, because its
+    /// rows are what happened rather than what is current.
     pub(crate) fn key_of(&self) -> TokenStream {
         if self.kind == Kind::Latest {
             return quote!(::doclite::doclite_core::key![document, revision]);
         }
 
         let fields = self.fields.iter().map(|field| quote!(self.#field.clone()));
-        if self.kind == Kind::Plain {
-            quote!(::doclite::doclite_core::key![#(#fields,)* document])
-        } else {
-            quote!(::doclite::doclite_core::key![#(#fields),*])
+        match self.kind {
+            Kind::Plain => quote!(::doclite::doclite_core::key![#(#fields,)* document]),
+            Kind::Feed => {
+                quote!(::doclite::doclite_core::key![#(#fields,)* revision, document])
+            }
+            Kind::Unique | Kind::Latest => quote!(::doclite::doclite_core::key![#(#fields),*]),
         }
     }
 }
@@ -319,6 +398,65 @@ mod tests {
             .key_of()
             .to_string()
             .contains("document , revision"));
+    }
+
+    fn owner(field: &str, ty: Type, many: bool) -> IndexSpec {
+        IndexSpec::owner(Ident::new(field, Span::call_site()), ty, many)
+    }
+
+    /// Several owners do not change the index. One revision lands in each of
+    /// their feeds, which is one call per owner rather than a wider key.
+    #[test]
+    fn a_field_holding_several_owners_files_one_row_each() {
+        let many = owner("watchers", parse_quote!(String), true);
+        assert_eq!(many.arity(), 3, "the key still holds one owner");
+
+        let files = many.files(&record()).to_string();
+        assert!(files.contains("for owner in & self . watchers"), "{files}");
+        assert!(files.contains("owner . clone ()"), "{files}");
+        assert!(files.contains("revision , document"), "{files}");
+    }
+
+    /// One owner is the call the other indexes get, and not a loop over
+    /// something that is not a list.
+    #[test]
+    fn a_field_holding_one_owner_files_one_row() {
+        let one = owner("account", parse_quote!(String), false);
+        let files = one.files(&record()).to_string();
+        assert!(!files.contains("for owner"), "{files}");
+        assert!(files.contains("self . account . clone ()"), "{files}");
+    }
+
+    /// A feed is named for what it is rather than for the field it is keyed on,
+    /// so a record has one however its owner is spelled.
+    #[test]
+    fn a_feed_is_named_after_the_record_and_nothing_else() {
+        let feed = spec(&["account"], Kind::Feed);
+        assert_eq!(feed.name(&record()), "user_account_feed");
+        assert_eq!(feed.constant().to_string(), "FEED");
+    }
+
+    /// The revision comes before the document, because that is what puts an
+    /// owner's rows in the order the changes happened.
+    #[test]
+    fn a_feed_key_ends_in_the_revision_then_the_document() {
+        let feed = spec(&["account"], Kind::Feed);
+        assert_eq!(feed.arity(), 3);
+        assert_eq!(feed.column_types().len(), 3);
+        let key = feed.key_of().to_string();
+        assert!(key.contains("self . account"), "{key}");
+        assert!(key.ends_with("revision , document]"), "{key}");
+    }
+
+    /// Only the generated index answers `Record::latest`, so a feed must not
+    /// be mistaken for it.
+    #[test]
+    fn a_feed_is_not_the_generated_index() {
+        let feed = spec(&["account"], Kind::Feed);
+        assert!(feed.feed());
+        assert!(!feed.generated());
+        assert!(!feed.unique());
+        assert!(!IndexSpec::latest().feed());
     }
 
     #[test]

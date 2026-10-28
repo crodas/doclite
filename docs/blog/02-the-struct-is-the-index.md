@@ -160,6 +160,38 @@ disambiguate.
 Reads are unaffected. `by_amount_cents(900_000)` is a prefix over the first
 column of a two-column index, and a prefix selects whole groups.
 
+## The rows that accumulate
+
+One attribute breaks the pattern the rest of this post describes. `#[owner]`
+says who a record's changes are about:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize, Document)]
+struct Deal {
+    #[unique] reference: Reference,
+    #[owner] account: Ref<Account>,
+    #[index] amount_cents: i64,
+}
+```
+
+That declares a feed, keyed on the owner, then the revision, then the document.
+The revision in the middle is the point: every other index holds what is
+current, and this one holds what happened, in the order it happened, because an
+id is minted in time order.
+
+So its rows are not retired when a record is superseded. An edit moves every
+other row of that record and adds one here, which is the only place in the
+schema where the count grows with the number of edits rather than the number of
+records.
+
+The owner is a column like any other. Nothing below the document layer learns
+the word, which is the same split as everywhere else: down there it is bytes in
+a key, and whether those bytes mean an account is this layer's business.
+
+A `Vec` of owners is the same index again. One revision then files one row per
+owner rather than one row, so the change lands in each of their feeds, and the
+key still holds exactly one owner because that is what a feed is read for.
+
 ## Querying: one method, values and ranges
 
 A `by_` method takes a value or a Rust range, and the argument decides which

@@ -100,6 +100,30 @@ fn refuse_bytes(input: &DeriveInput) -> Result<()> {
     Ok(())
 }
 
+/// The owner a `Vec<T>` holds several of, and `None` for a field that is one
+/// owner.
+///
+/// Read off the written type, the way [`holds_bytes`] is: a `type Owners =
+/// Vec<Ref<User>>` alias goes through as one owner and fails to compile at the
+/// column it cannot be. It catches what gets written rather than everything
+/// that could be.
+fn element(ty: &Type) -> Option<&Type> {
+    let Type::Path(path) = ty else {
+        return None;
+    };
+    let last = path.path.segments.last()?;
+    if last.ident != "Vec" {
+        return None;
+    }
+    let PathArguments::AngleBracketed(arguments) = &last.arguments else {
+        return None;
+    };
+    let Some(GenericArgument::Type(inner)) = arguments.args.first() else {
+        return None;
+    };
+    Some(inner)
+}
+
 /// Whether a type is one JSON would write as an array of numbers.
 ///
 /// Looks through `Option` and a reference, which is where a byte field actually
@@ -171,7 +195,28 @@ fn immutable(input: &DeriveInput) -> Result<bool> {
     Ok(marked)
 }
 
+/// Whether the struct put `#[owner]` where it cannot go.
+///
+/// An owner is one field's value, so the attribute belongs on that field. An
+/// owner made of several fields is a feed keyed on a tuple, which nothing here
+/// writes yet, and reading `#[owner(clinic, patient)]` as the first component
+/// alone would file every change under the wrong key.
+fn owner_on_the_struct(input: &DeriveInput) -> Result<()> {
+    for attribute in &input.attrs {
+        if attribute.path().is_ident("owner") {
+            return Err(Error::new_spanned(
+                attribute,
+                "owner belongs on the field that holds it; an owner made of several fields \
+                 is not something this writes",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn indexes(input: &DeriveInput) -> Result<Vec<IndexSpec>> {
+    owner_on_the_struct(input)?;
+
     let Data::Struct(data) = &input.data else {
         return Err(Error::new_spanned(
             input,
@@ -186,6 +231,7 @@ fn indexes(input: &DeriveInput) -> Result<Vec<IndexSpec>> {
     };
 
     let mut specs = Vec::new();
+    let mut owner: Option<Ident> = None;
 
     for field in &named.named {
         let Some(ident) = field.ident.clone() else {
@@ -204,6 +250,28 @@ fn indexes(input: &DeriveInput) -> Result<Vec<IndexSpec>> {
                     vec![field.ty.clone()],
                     Kind::Plain,
                 ));
+            } else if attribute.path().is_ident("owner") {
+                if !matches!(attribute.meta, Meta::Path(_)) {
+                    return Err(Error::new_spanned(
+                        attribute,
+                        "owner takes no arguments; the field it is on is the owner",
+                    ));
+                }
+                if let Some(first) = &owner {
+                    return Err(Error::new_spanned(
+                        &ident,
+                        format!(
+                            "`{first}` is already this record's owner; a record has one feed, \
+                             and which owner a change belongs to cannot be two answers"
+                        ),
+                    ));
+                }
+                owner = Some(ident.clone());
+                let (ty, many) = match element(&field.ty) {
+                    Some(element) => (element.clone(), true),
+                    None => (field.ty.clone(), false),
+                };
+                specs.push(IndexSpec::owner(ident.clone(), ty, many));
             }
         }
     }
@@ -268,9 +336,13 @@ fn indexes(input: &DeriveInput) -> Result<Vec<IndexSpec>> {
 /// alone gives the caller a duplicate-definition error spanned at
 /// `#[derive(Document)]` rather than at the attribute they wrote. It is refused
 /// here because here is where the span is.
+///
+/// A feed is exempt, because it names `FEED` and `user_feed` whatever field it
+/// is keyed on: `#[owner]` and `#[index]` on one field are two indexes of that
+/// field at two shapes, which is the ordinary way to both scope and feed it.
 fn repeated(specs: &[IndexSpec]) -> Option<Error> {
     let mut held: Vec<&[Ident]> = Vec::new();
-    for spec in specs {
+    for spec in specs.iter().filter(|spec| !spec.feed()) {
         let fields = spec.fields();
         if held.iter().any(|seen| same(seen, fields)) {
             let named = fields
@@ -307,6 +379,101 @@ mod tests {
 
     fn chosen(input: DeriveInput) -> Codec {
         schema(&input).expect("this parses").codec()
+    }
+
+    fn kinds(input: DeriveInput) -> Vec<String> {
+        schema(&input)
+            .expect("this parses")
+            .indexes()
+            .iter()
+            .map(|spec| spec.constant().to_string())
+            .collect()
+    }
+
+    /// One field can be both scoped and fed: the two indexes are keyed
+    /// differently and neither name collides with the other.
+    #[test]
+    fn a_field_can_be_both_an_index_and_the_owner() {
+        assert_eq!(
+            kinds(parse_quote! {
+                struct Deal {
+                    #[owner]
+                    #[index]
+                    account: String,
+                }
+            }),
+            ["LATEST", "FEED", "BY_ACCOUNT"],
+            "the generated index, then the attributes in the order they are written"
+        );
+    }
+
+    /// A `Vec` owner keeps the element as the column type, because a key holds
+    /// one owner whichever shape the field has.
+    #[test]
+    fn a_vec_of_owners_is_keyed_on_one_of_them() {
+        let declared = schema(&parse_quote! {
+            struct Deal {
+                #[owner]
+                watchers: Vec<String>,
+            }
+        })
+        .expect("this parses");
+
+        let feed = declared
+            .indexes()
+            .iter()
+            .find(|spec| spec.feed())
+            .expect("the feed is declared");
+
+        assert_eq!(feed.arity(), 3);
+        assert_eq!(
+            feed.column_types()[0].to_string(),
+            quote::quote!(<String as ::doclite::doclite_core::ToOrdBytes>::COLUMN_TYPE).to_string(),
+            "the element answers for the column, not the list"
+        );
+        assert!(feed
+            .files(&parse_quote!(Deal))
+            .to_string()
+            .contains("for owner"));
+    }
+
+    #[test]
+    fn a_record_with_a_second_owner_is_refused() {
+        let why = refusal(parse_quote! {
+            struct Deal {
+                #[owner]
+                account: String,
+                #[owner]
+                clinic: String,
+            }
+        });
+        assert!(
+            why.contains("`account` is already this record's owner"),
+            "{why}"
+        );
+    }
+
+    #[test]
+    fn an_owner_on_the_struct_is_refused() {
+        let why = refusal(parse_quote! {
+            #[owner(clinic, patient)]
+            struct Visit {
+                #[unique]
+                reference: String,
+            }
+        });
+        assert!(why.contains("belongs on the field"), "{why}");
+    }
+
+    #[test]
+    fn an_owner_taking_arguments_is_refused() {
+        let why = refusal(parse_quote! {
+            struct Deal {
+                #[owner(account)]
+                account: String,
+            }
+        });
+        assert!(why.contains("takes no arguments"), "{why}");
     }
 
     #[test]

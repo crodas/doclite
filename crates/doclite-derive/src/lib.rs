@@ -36,6 +36,18 @@ pub fn derive_column(input: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
+/// `#[owner]` on a field declares a feed: one row per revision rather than per
+/// record, keyed `(owner, revision, document)`, which is what lets one owner's
+/// changes be read in the order they happened.
+///
+/// ```text
+/// #[derive(Debug, Clone, Serialize, Deserialize, Document)]
+/// pub struct Deal {
+///     #[owner] account: Ref<Account>,
+///     #[index] amount_cents: i64,
+/// }
+/// ```
+///
 /// A struct marked `#[immutable]` is filed and queried like any other, but the
 /// expansion leaves out the impl that `Connection::update` asks for, so editing
 /// one is a compile error:
@@ -54,7 +66,7 @@ pub fn derive_column(input: TokenStream) -> TokenStream {
 /// Shown rather than compiled, because this crate cannot depend on the one that
 /// gives the expansion something to stand on. `doclite`'s own documentation
 /// carries the same example as a test that runs.
-#[proc_macro_derive(Document, attributes(index, unique, immutable, storage))]
+#[proc_macro_derive(Document, attributes(index, unique, owner, immutable, storage))]
 pub fn derive_document(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     document::expand(&input)

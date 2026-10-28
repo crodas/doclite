@@ -109,6 +109,45 @@ whole reason the id does not move when a record is edited. `load_many` follows a
 whole set in one scan rather than one read each, because they are all rows in
 one ordered index.
 
+## Who a change belongs to
+
+`#[owner]` on a field says who a record's changes are about. Every revision is
+then filed in a feed of its own, keyed on the owner, the revision and the
+document:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize, Document)]
+struct Deal {
+    #[unique] reference: Reference,
+    #[owner] account: Ref<Account>,
+    #[index] amount_cents: i64,
+}
+```
+
+The owner is a column like any other, so nothing below the document layer
+learns the word: in `doclite-core` it is bytes in a key. What makes a feed
+different from the indexes above it is that its rows accumulate. An edit moves
+every other row and adds one here, so one account's row sits next to the next
+one in the order the changes happened, which is what an id minted in time order
+buys.
+
+A field can be both, and the pair is the usual one: `#[index]` answers who the
+record is about now, `#[owner]` what has happened to it.
+
+A record can belong to several owners at once by holding a `Vec` of them:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize, Document)]
+struct Task {
+    #[unique] title: String,
+    #[owner] watchers: Vec<Ref<User>>,
+}
+```
+
+That does not widen the key. One revision files one row per owner, so the
+change lands in each of their feeds, and a feed is still read for one owner. An
+empty list files nothing, which is what a record with no owners means.
+
 ## Records that are never edited
 
 A record marked `#[immutable]` has exactly one revision, ever. The derive leaves

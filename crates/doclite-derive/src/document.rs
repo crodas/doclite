@@ -36,19 +36,12 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
         .map(IndexSpec::constant)
         .ok_or_else(|| Error::new_spanned(input, "every record is given a latest index"))?;
 
-    let rows = specs.iter().map(|spec| {
-        let constant = spec.constant();
-        let name = spec.name(record);
-        let key = spec.key_of();
-        let unique = spec.unique();
-        quote! {
-            into.row(&#record::#constant, #key, #name, #unique);
-        }
-    });
+    let rows = specs.iter().map(|spec| spec.files(record));
 
     let builder = format_ident!("{record}Query");
     let methods = specs
         .iter()
+        .filter(|spec| !spec.feed())
         .flat_map(|spec| by_methods(record, spec))
         .collect::<Vec<_>>();
 
@@ -138,6 +131,10 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
 /// One `by_` method per prefix of the index, since a prefix is what an ordered
 /// index can answer. The earlier components are equalities and only the last
 /// takes bounds.
+///
+/// A feed gets none of these. Its rows are read for one owner and ranged on the
+/// revision, which is not a prefix of the fields it names, and a `by_account`
+/// here would collide with the one `#[index] account` writes.
 fn by_methods(record: &Ident, spec: &IndexSpec) -> Vec<TokenStream> {
     (1..=spec.fields().len())
         .map(|width| by_method(record, spec, width))
