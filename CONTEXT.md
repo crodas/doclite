@@ -85,6 +85,47 @@ executor would have recorded has nothing left to protect.
 yields each row once, and what to do with one is the caller's; retiring and
 filing are the same walk with a different `Rows`.
 
+## Being told what changed
+
+**Owner.** Who a record's changes belong to, declared by `#[owner]` on the
+field that holds it. It is a column like any other, so nothing below the
+document layer learns the word, and which owner a change belongs to is a fact
+about the record at the moment it was written rather than a relationship the
+store keeps. A field holding a `Vec` is several owners, and the index does not
+change: a revision files one row per owner, so a feed is read for one owner
+whichever shape the field has. Whether a record has one at all is
+`Record::FEEDS`, a constant, so a record with no owner cannot emit rather than
+merely never emitting.
+
+**Feed.** The index `#[owner]` declares, keyed `(owner, revision, document)`,
+and the one index whose rows accumulate: `Retire` leaves them where they are,
+so there is one row per revision per owner rather than one per record. An empty
+list of owners files nothing, and a repeated owner files one row, because a row
+is its key. That is the whole
+of the feature. Catching up is a range scan of it, being told is that scan with
+a tail, and nothing below `doclite` needed a new idea to support either. ADR
+0016.
+
+**Checkpoint.** Where a reader of a feed left off. A `RevisionId` rather than a
+time, because two revisions can share a millisecond and a cursor that cannot
+tell them apart either skips one or repeats it for ever. A `Timestamp` converts
+in, landing at the start of its millisecond, so a reader that kept only the
+time replays rather than misses. `Checkpoint::after` is what makes an ordinary
+resume exact; delivery is at least once either way, and `Stored::revision` is
+what to deduplicate on.
+
+**Notice.** One feed row, as the write that filed it saw it, handed to whoever
+is watching once the operation committed. Never during the walk: a losing
+operation is walked again, so a notice from inside it would announce a change
+that did not happen. `Notify` is the `Rows` implementation that collects them,
+beside `Retire`, `File` and `Claim`, so a notice and the row it stands for
+cannot disagree about a key.
+
+**Lagging.** What a subscriber does instead of holding up a writer. Its channel
+is bounded, and a full one is reported once and then read out of the feed. The
+live channel is allowed to drop because the rows are durable, which is the
+whole reason the scan is the primitive and the notice is the optimisation.
+
 ## Filling an index
 
 **Building.** An index that has been declared but does not yet hold every row

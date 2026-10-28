@@ -106,11 +106,54 @@ Small, real, and each one already written down where it bites.
   unfindable and no later open retries. Reaching it means something outside this
   crate edited the database, and it is the one failure here that is quiet rather
   than loud. ADR 0015.
+- **A list of owners is recognised syntactically.** `#[owner]` reads the
+  field's written type, so `Vec<T>` is several owners and anything else is one.
+  A `type Owners = Vec<Ref<User>>` alias or a newtype around one is read as a
+  single owner and fails to compile as a column. The same limit as the
+  `#[storage(json)]` byte-field refusal above, and the same reason: a derive
+  has no type information.
+- **A feed's order is mint order, not commit order.** An id is minted while an
+  operation is built, so a slow transaction can commit after a change with a
+  higher revision is already visible, and a reader resuming from the highest
+  one it saw can miss it. The fix is the reader's: lag the checkpoint it keeps
+  by its longest build-to-commit time, and let the at-least-once delivery
+  absorb the overlap. Closing it properly needs a sequence the store assigns,
+  which ADR 0007 rules out. The live path has no such gap.
+- **A feed added to an existing store is filled from the live revision of each
+  document.** A rebuild pages `<record>_latest`, which names live revisions
+  only, so the first catch-up reads as a snapshot rather than as a history even
+  though the older revisions are still there. Walking `prev` to fill the whole
+  history is possible and is not done. ADR 0016.
+- **A reassignment is invisible as a departure.** Moving a record from one
+  owner to another ends one feed and starts another, and the old owner is not
+  told it left. A subscriber mirroring that owner keeps a stale copy.
+- **Nothing frees a feed.** It is the one index whose size grows with edits
+  rather than with records. Pruning is a range delete an operation can already
+  express, but the key order decides what is cheap: by owner is one range, by
+  time is one range per owner.
 - **One contention test has failed once.** `one_writer_takes_the_key` failed
   during a full parallel run and did not reproduce across eleven later runs. The
   cause is unverified. The plausible candidate is the retry loop exhausting its
   attempts under load, which would surface as the arm of that test which
   expects a write to be either filed or refused.
+
+### More of what a feed could be
+
+`#[owner]` takes one field, and a record has one feed. Each of these is named
+by the code or the ADR as deferred rather than missing:
+
+An owner made of several fields. `#[owner(clinic, patient)]` is refused today,
+because reading it as the first component alone would file every change under
+the wrong key.
+
+A watch that outlives its scope. `Changes` borrows the connection, so a watcher
+lives where the store was opened rather than being handed to a task that
+outlives it.
+
+Delivery between processes. The bus is one connection's, so a second process
+writing the same database is not seen. The catch-up scan on a timer is the
+answer that already works; a notifier over SQLite's update hook would be an
+optimisation of it.
 
 ## Not on the roadmap
 

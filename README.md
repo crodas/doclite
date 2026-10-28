@@ -148,6 +148,45 @@ That does not widen the key. One revision files one row per owner, so the
 change lands in each of their feeds, and a feed is still read for one owner. An
 empty list files nothing, which is what a record with no owners means.
 
+Reading one owner's changes is a scan of that index, from wherever the reader
+left off:
+
+```rust
+let changes = Deal::feed(&conn, account).since(checkpoint).get_many().await?;
+
+let next = changes
+    .last()
+    .map(|change| Checkpoint::after(change.revision()));
+```
+
+What comes back is a `Stored<Deal>` per change, holding the record as it was at
+that change rather than as it is now. A `Checkpoint` is a revision rather than a
+time, because two revisions can share a millisecond; a `Timestamp` converts into
+one, landing at the start of its millisecond, so a reader that kept only the
+time replays a few rows rather than missing any.
+
+`watch` is the same read with a tail. The rows the feed already held come first,
+in order, and then it waits:
+
+```rust
+let mut changes = Deal::feed(&conn, account).watch().await?;
+
+while let Some(change) = changes.next().await {
+    match change? {
+        Change::Revised(deal) => handle(deal),
+        Change::Lagged { from } => log(from),
+    }
+}
+```
+
+A notice is published once the write has committed and never during the walk,
+since a losing operation is walked again. The channel behind a watcher is
+bounded and is allowed to drop: a reader that stops draining is told it fell
+behind once and handed the rest out of the feed, so a slow subscriber cannot
+hold up a writer. That is the whole reason the durable scan is the primitive
+and being told is the optimisation. Delivery is at least once, and
+`Stored::revision` is what to deduplicate on.
+
 ## Records that are never edited
 
 A record marked `#[immutable]` has exactly one revision, ever. The derive leaves
@@ -354,6 +393,7 @@ lands in. `MemoryEngine` is the second kind.
 ```sh
 cargo run -p doclite --example quickstart          # one record, filed and changed
 cargo run -p doclite --example crm                 # two records, a pipeline, history
+cargo run -p doclite --example feed                # one owner's changes, caught up and watched
 cargo run -p doclite-memory --example operations   # the storage layer, no derive
 ```
 

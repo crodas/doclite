@@ -7,6 +7,46 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Before 1.0 a minor bump is where a breaking change goes.
 
+## Unreleased
+
+### Added
+
+- **A record can say who its changes belong to.** `#[owner]` on a field
+  declares a feed: an index keyed `(owner, revision, document)` whose rows
+  accumulate, so one owner's changes read in the order they happened.
+  `Deal::feed(&conn, account).since(checkpoint).get_many()` is the catch-up,
+  and a `Checkpoint` is a revision rather than a time because two revisions can
+  share a millisecond. A `Timestamp` converts into one at the start of its
+  millisecond, so a reader that kept only the time replays rather than misses.
+  ADR 0016.
+- **`Feed::watch`, which is that read with a tail.** The rows the feed already
+  held, in order, then the ones that have not happened yet. A notice is
+  published once the write committed, carries the columns the record's own walk
+  produced, and reaches a subscriber whose key is a prefix of them. The channel
+  is bounded and allowed to drop: a reader that falls behind is told once and
+  handed the rest out of the feed, so a slow subscriber cannot hold up a
+  writer. A store nobody watches walks nothing.
+- **A record can belong to several owners at once.** `#[owner]` on a field
+  holding a `Vec` keys the feed on one element of it, so a revision files one
+  row per owner and lands in each of their feeds. The key is not widened,
+  because a feed is read for one owner either way. An empty list files nothing
+  and a repeated owner files one row.
+- **`id::first_minted_at`**, the inverse of `id::minted_at`, rounding down to
+  the first id a millisecond could hold.
+
+### Changed
+
+- **`Rows::row` takes a `Filing` rather than a `unique: bool`.** Breaking for
+  anyone implementing `Record` by hand, which the derive otherwise writes. What
+  an index is for decides two things now rather than one: whether a unique key
+  is claimed, and whether the row is retired when the record is superseded.
+- **`Record` has a `FEEDS` constant.** Breaking for the same callers and
+  without a default on purpose: `None` would read as "no feed" for a
+  hand-written record that has one. It is what makes a record with no owner
+  unable to emit rather than merely never emitting, and it keeps a subscriber
+  watching one record from making every write of every other type walk its
+  indexes.
+
 ## 0.2.0 - 2026-10-22
 
 ### Added
