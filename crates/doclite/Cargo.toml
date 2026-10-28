@@ -23,6 +23,7 @@ async-trait.workspace = true
 # The read gate's waiters. A oneshot that belongs to no runtime is what lets a
 # read wait for an index to be filled without this crate choosing one.
 futures-channel.workspace = true
+futures-core.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true

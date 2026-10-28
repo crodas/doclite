@@ -15,6 +15,7 @@
 
 use doclite_core::{exact, key, AbortCode, Index, IndexId, Key, Operation};
 
+use crate::bus::Notice;
 use crate::error::DocumentError;
 use crate::identity::{DocumentId, RevisionId};
 use crate::record::{Codes, Filing, Only, Reason, Record, Rows};
@@ -272,6 +273,55 @@ impl Rows for File {
     }
 }
 
+/// Collects the feed rows a write files, as the notices they become.
+///
+/// The same walk that files them, so a notice and the row it stands for cannot
+/// disagree about a key. Only feed rows: a subscriber subscribes to a feed, and
+/// every other row of a record is a fact about what is current rather than a
+/// change that happened.
+pub(crate) struct Notify {
+    document: DocumentId,
+    revision: RevisionId,
+    notices: Vec<Notice>,
+}
+
+impl Notify {
+    /// What this write will have changed, once it commits.
+    pub(crate) fn walk<T: Record>(
+        value: &T,
+        document: DocumentId,
+        revision: RevisionId,
+    ) -> Vec<Notice> {
+        let mut into = Self {
+            document,
+            revision,
+            notices: Vec::new(),
+        };
+        value.rows(document, revision, &mut into);
+        into.notices
+    }
+}
+
+impl Rows for Notify {
+    fn row<const N: usize>(
+        &mut self,
+        index: &Index<N>,
+        key: Key<N>,
+        _name: &'static str,
+        filing: Filing,
+    ) {
+        if filing != Filing::Feed {
+            return;
+        }
+        self.notices.push(Notice {
+            index: index.id(),
+            key: key.into_columns(),
+            document: self.document,
+            revision: self.revision,
+        });
+    }
+}
+
 /// Refuses the operation if any unique key this value claims is taken, and
 /// remembers which index was given which code on the way past.
 struct Claim {
@@ -347,6 +397,8 @@ mod tests {
     /// Written by hand rather than derived, because this crate cannot depend on
     /// the macro that expands into it. It is the shape the derive emits.
     impl Record for Note {
+        const FEEDS: Option<IndexId> = Some(FEED.id());
+
         fn schemas() -> Vec<doclite_core::IndexSchema> {
             vec![
                 LATEST.schema(),

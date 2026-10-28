@@ -70,6 +70,20 @@ pub trait Record: ToStorage + FromStorage + Clone + Send + Sync + Sized {
     /// Every index this type is filed under, for `Connection::open`.
     fn schemas() -> Vec<IndexSchema>;
 
+    /// Which index this record's changes are filed in, and `None` for a record
+    /// that declares no `#[owner]`.
+    ///
+    /// A fact about the schema rather than about anything stored, so a record
+    /// with no owner cannot emit a notice: the check is a constant in the
+    /// caller that would have published one, and the walk it guards is
+    /// compiled away rather than skipped. ADR 0012's reasoning in a third
+    /// place.
+    ///
+    /// Deliberately without a default. `None` would read as "no feed" for a
+    /// hand-written record that has one, which is a store that quietly never
+    /// tells anybody anything.
+    const FEEDS: Option<IndexId>;
+
     /// The generated index holding one row per live record.
     ///
     /// It is the one index this layer names itself, because asking whether a

@@ -51,6 +51,19 @@ mod v2 {
     }
 }
 
+/// The same record again, with the shelf as the owner of its changes.
+mod v4 {
+    use super::*;
+
+    #[derive(Clone, Debug, Document, Serialize, Deserialize)]
+    pub struct Note {
+        #[unique]
+        pub slug: String,
+        #[owner]
+        pub shelf: String,
+    }
+}
+
 /// The same record again, with the shelf claimed as unique.
 mod v3 {
     use super::*;
@@ -359,6 +372,72 @@ async fn an_abandoned_rebuild_tells_the_reader_rather_than_hanging() -> Result<(
         }
         Err(other) => panic!("the rebuild went away, not {other}"),
         Ok(_) => panic!("nothing filled the index, so nothing may answer from it"),
+    }
+
+    remove(&path);
+    Ok(())
+}
+
+/// A feed added to a store that already holds records is filled the way any
+/// other index is, and that fill has a limit worth knowing: a rebuild pages
+/// `<record>_latest`, which names live revisions only, so the feed starts with
+/// one row per document rather than with its whole history.
+#[tokio::test]
+async fn a_feed_declared_over_an_existing_store_is_filled_from_the_live_revision(
+) -> Result<(), DocumentError> {
+    let path = scratch();
+    remove(&path);
+
+    let engine = SqliteEngine::open(&path)?;
+    let conn = Connection::open(engine, records![v1::Note]).await?;
+    let mut note = conn
+        .insert(v1::Note {
+            slug: "one".into(),
+            shelf: "left".into(),
+        })
+        .await?;
+    for _ in 0..2 {
+        note.slug = format!("{}-again", note.slug);
+        note = conn.update(note).await?;
+    }
+    drop(conn);
+
+    let engine = SqliteEngine::open(&path)?;
+    let conn = Connection::open(engine, records![v4::Note]).await?;
+
+    let changes = v4::Note::feed(&conn, "left".to_string()).get_many().await?;
+    assert_eq!(
+        changes.len(),
+        1,
+        "three revisions were written and the fill knows only the live one"
+    );
+    assert_eq!(changes[0].revision(), note.revision());
+    assert_eq!(changes[0].slug, "one-again-again");
+
+    remove(&path);
+    Ok(())
+}
+
+/// A watch waits for the feed to be filled, because a notice from a feed whose
+/// older rows are still missing would let a reader move its checkpoint past
+/// rows it never saw. With nothing left to do the filling, it refuses.
+#[tokio::test]
+async fn a_watch_of_a_feed_that_is_still_being_filled_refuses_rather_than_waiting_forever(
+) -> Result<(), DocumentError> {
+    let path = scratch();
+    remove(&path);
+
+    before(&path, &[("one", "left")]).await?;
+
+    let engine = SqliteEngine::open(&path)?;
+    let conn = Connection::spawning(engine, records![v4::Note], Dropped).await?;
+
+    match v4::Note::feed(&conn, "left".to_string()).watch().await {
+        Err(DocumentError::Rebuilding { index }) => {
+            assert_eq!(index, doclite::doclite_core::IndexId("note_feed"))
+        }
+        Err(other) => panic!("the rebuild went away, not {other}"),
+        Ok(_) => panic!("a feed with rows missing may not be watched"),
     }
 
     remove(&path);

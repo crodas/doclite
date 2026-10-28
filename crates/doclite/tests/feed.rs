@@ -76,6 +76,24 @@ struct Task {
     done: bool,
 }
 
+/// A record that declares no owner, so nothing about it is ever announced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Document)]
+struct Note {
+    #[unique]
+    slug: String,
+
+    body: String,
+}
+
+/// Whether a record has a feed is settled by the type, which is what lets a
+/// write of one that has none publish nothing without reading anything.
+#[test]
+fn a_record_with_no_owner_declares_no_feed() {
+    assert_eq!(Note::FEEDS, None);
+    assert_eq!(Deal::FEEDS, Some(IndexId("deal_feed")));
+    assert_eq!(Task::FEEDS, Some(IndexId("task_feed")));
+}
+
 /// Several owners do not widen the key: a column holds one owner, and a feed is
 /// read for one owner whichever shape the field has. What changes is how many
 /// rows one revision files, which is one per owner.

@@ -130,6 +130,7 @@ pub use doclite_core::{json_storage, serde_storage};
 pub use doclite_derive::{Column, Document};
 
 pub mod bounds;
+mod bus;
 pub mod clock;
 pub mod connection;
 pub mod error;
@@ -150,7 +151,7 @@ pub use crate::bounds::{greater_than, Bounds, Comparison, IntoBounds};
 pub use crate::clock::{Clock, FixedClock, SystemClock, Timestamp};
 pub use crate::connection::Connection;
 pub use crate::error::DocumentError;
-pub use crate::feed::{Checkpoint, Feed, Scan};
+pub use crate::feed::{Change, Changes, Checkpoint, Feed, Scan};
 pub use crate::id::{IdError, IdSource, NodeId, Snowflake};
 pub use crate::identity::{DocumentId, Ref, RevisionId};
 pub use crate::query::{scan_between, scan_prefix, scan_within, Selection};

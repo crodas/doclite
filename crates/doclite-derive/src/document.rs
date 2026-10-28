@@ -36,6 +36,14 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
         .map(IndexSpec::constant)
         .ok_or_else(|| Error::new_spanned(input, "every record is given a latest index"))?;
 
+    let feeds = specs.iter().find(|spec| spec.feed()).map_or_else(
+        || quote!(::std::option::Option::None),
+        |spec| {
+            let constant = spec.constant();
+            quote!(::std::option::Option::Some(#record::#constant.id()))
+        },
+    );
+
     let rows = specs.iter().map(|spec| spec.files(record));
 
     let feed = specs.iter().find(|spec| spec.feed()).map(|spec| {
@@ -102,6 +110,8 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
         }
 
         impl ::doclite::Record for #record {
+            const FEEDS: ::std::option::Option<::doclite::doclite_core::IndexId> = #feeds;
+
             fn schemas() -> ::std::vec::Vec<::doclite::doclite_core::IndexSchema> {
                 ::std::vec![#(#schemas),*]
             }

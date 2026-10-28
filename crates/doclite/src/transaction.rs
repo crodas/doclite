@@ -20,10 +20,12 @@
 
 use doclite_core::{Engine, Operation, Outcome};
 
+use crate::bus::Notice;
 use crate::clock::Clock;
 use crate::connection::Connection;
 use crate::error::DocumentError;
 use crate::id::minted_at;
+use crate::identity::{DocumentId, RevisionId};
 use crate::record::{Amendable, Codes, Record, CODE_BASE};
 use crate::revision::{Revision, Stored};
 use crate::write::{self, Refusals};
@@ -37,6 +39,7 @@ pub struct Transaction<'a, E, C> {
     connection: &'a Connection<E, C>,
     operation: Operation,
     staged: Vec<Refusals>,
+    notices: Vec<Notice>,
     next: u32,
 }
 
@@ -46,6 +49,7 @@ impl<'a, E: Engine, C: Clock> Transaction<'a, E, C> {
             connection,
             operation: Operation::new(),
             staged: Vec::new(),
+            notices: Vec::new(),
             next: CODE_BASE,
         }
     }
@@ -62,6 +66,7 @@ impl<'a, E: Engine, C: Clock> Transaction<'a, E, C> {
 
         let write = write::insert(&envelope, document, revision, Codes::at(self.next));
         self.stage(write);
+        self.watch(&envelope, document, revision);
 
         Ok(Stored::new(revision, envelope))
     }
@@ -82,6 +87,7 @@ impl<'a, E: Engine, C: Clock> Transaction<'a, E, C> {
 
         let write = write::supersede(&envelope, was, document, old, new, Codes::at(self.next));
         self.stage(write);
+        self.watch(&envelope, document, new);
 
         Ok(Stored::new(new, envelope))
     }
@@ -108,13 +114,37 @@ impl<'a, E: Engine, C: Clock> Transaction<'a, E, C> {
         }
 
         match self.connection.db().run(&self.operation).await? {
-            Outcome::Committed(()) => Ok(()),
+            Outcome::Committed(()) => {
+                self.connection.publish(&self.notices);
+                Ok(())
+            }
             Outcome::Aborted(code) => Err(self
                 .staged
                 .iter()
                 .find(|staged| staged.owns(code))
                 .map_or(DocumentError::Aborted(code), |staged| staged.refusal(code))),
         }
+    }
+
+    /// Keeps what a staged write will have changed, for whoever is watching.
+    ///
+    /// Collected while staging because the value is here and gone by the time
+    /// the commit answers, and published only if that commit succeeds. A
+    /// subscriber that arrives between the two hears nothing of this
+    /// transaction and misses nothing: the rows are in the feed before its own
+    /// catch-up scan runs.
+    fn watch<T: Record>(
+        &mut self,
+        envelope: &Revision<T>,
+        document: DocumentId,
+        revision: RevisionId,
+    ) {
+        if T::FEEDS.is_none() || !self.connection.watching() {
+            return;
+        }
+        let value: &T = envelope;
+        self.notices
+            .extend(write::Notify::walk(value, document, revision));
     }
 
     fn stage(&mut self, write: write::Write) {

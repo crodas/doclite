@@ -41,3 +41,6 @@ serde_json = { version = "1.0", features = ["raw_value"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 futures-channel = { version = "0.3", default-features = false, features = ["std"] }
+# Only for `Stream`, so a notice can be awaited without this crate choosing a
+# runtime or pulling in futures-util.
+futures-core = { version = "0.3", default-features = false }

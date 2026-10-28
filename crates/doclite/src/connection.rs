@@ -7,6 +7,7 @@ use doclite_core::{
     Runnable,
 };
 
+use crate::bus::{Bus, Notice, Subscription};
 use crate::clock::{Clock, SystemClock};
 use crate::error::DocumentError;
 use crate::gate::{Building, Gate};
@@ -34,6 +35,7 @@ use crate::write;
 pub(crate) struct Shared<E> {
     pub(crate) db: Db<E>,
     pub(crate) gate: Arc<Gate>,
+    pub(crate) bus: Bus,
 }
 
 /// A store and the mint that names what goes into it.
@@ -96,6 +98,7 @@ impl<E: Engine> Connection<E, SystemClock> {
             shared: Arc::new(Shared {
                 gate: Arc::new(Gate::default()),
                 db,
+                bus: Bus::default(),
             }),
             ids: Snowflake::new(SystemClock, NodeId::derived()),
         })
@@ -165,7 +168,11 @@ impl<E: Engine, C: Clock> Connection<E, C> {
         let db = Db::open(engine, &records.schemas()).await?;
         let gate = Arc::new(Gate::over(db.building()));
         Ok(Self {
-            shared: Arc::new(Shared { db, gate }),
+            shared: Arc::new(Shared {
+                db,
+                gate,
+                bus: Bus::default(),
+            }),
             ids: Snowflake::new(clock, node),
         })
     }
@@ -209,6 +216,64 @@ impl<E: Engine, C: Clock> Connection<E, C> {
         self.ids.next()
     }
 
+    /// Waits until this index holds every row it should.
+    ///
+    /// What [`Connection::gated`] does for an operation, for a caller that has
+    /// to wait before it subscribes rather than while it reads: a live notice
+    /// from a feed whose older rows are still being filled would let a reader
+    /// advance its checkpoint past rows it never saw.
+    pub(crate) async fn ready(&self, index: IndexId) -> Result<(), DocumentError> {
+        if self.shared.gate.armed() {
+            self.shared.gate.clear(&[index]).await?;
+        }
+        Ok(())
+    }
+
+    /// Whether anything is listening, which is what keeps a store nobody
+    /// watches from walking a record it has already filed.
+    pub(crate) fn watching(&self) -> bool {
+        !self.shared.bus.quiet()
+    }
+
+    /// Listens for the feed rows of one index under one key.
+    pub(crate) fn subscribe(
+        &self,
+        index: IndexId,
+        prefix: Vec<doclite_core::Column>,
+        capacity: usize,
+    ) -> Subscription {
+        self.shared.bus.subscribe(index, prefix, capacity)
+    }
+
+    /// Tells whoever is watching what a committed write filed.
+    ///
+    /// After the commit rather than during the walk, because a losing operation
+    /// is walked again (ADR 0003). A subscriber that arrives between the commit
+    /// and this call hears nothing and loses nothing: the rows are already in
+    /// the feed, and its own catch-up scan runs after it subscribes.
+    ///
+    /// A record with no feed leaves here before anything is read or walked,
+    /// because [`Record::FEEDS`] is a constant: there is nothing it could
+    /// announce, and nothing is the answer whether or not anybody is watching
+    /// some other record.
+    pub(crate) fn announce<T: Record>(
+        &self,
+        value: &T,
+        document: DocumentId,
+        revision: RevisionId,
+    ) {
+        if T::FEEDS.is_none() || !self.watching() {
+            return;
+        }
+        self.publish(&write::Notify::walk(value, document, revision));
+    }
+
+    /// Hands notices already collected to the bus, for a transaction that
+    /// gathered them as it staged.
+    pub(crate) fn publish(&self, notices: &[Notice]) {
+        self.shared.bus.publish(notices);
+    }
+
     /// Files a new record.
     ///
     /// One operation: an absence check per unique index, the revision itself,
@@ -228,7 +293,11 @@ impl<E: Engine, C: Clock> Connection<E, C> {
 
         let write = write::insert(&envelope, document, revision, Codes::at(CODE_BASE));
         match self.gated(write.operation()).await? {
-            Outcome::Committed(()) => Ok(Stored::new(revision, envelope)),
+            Outcome::Committed(()) => {
+                let value: &T = &envelope;
+                self.announce(value, document, revision);
+                Ok(Stored::new(revision, envelope))
+            }
             Outcome::Aborted(code) => Err(write.refusal(code)),
         }
     }
@@ -279,7 +348,11 @@ impl<E: Engine, C: Clock> Connection<E, C> {
 
         let write = write::supersede(&envelope, was, document, old, new, Codes::at(CODE_BASE));
         match self.gated(write.operation()).await? {
-            Outcome::Committed(()) => Ok(Stored::new(new, envelope)),
+            Outcome::Committed(()) => {
+                let value: &T = &envelope;
+                self.announce(value, document, new);
+                Ok(Stored::new(new, envelope))
+            }
             Outcome::Aborted(code) => Err(write.refusal(code)),
         }
     }
@@ -368,7 +441,7 @@ impl<E: Engine, C: Clock> Connection<E, C> {
         Ok(older)
     }
 
-    async fn fetch<T: Record>(
+    pub(crate) async fn fetch<T: Record>(
         &self,
         revision: RevisionId,
     ) -> Result<Option<Revision<T>>, DocumentError> {
