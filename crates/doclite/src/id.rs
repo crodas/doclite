@@ -176,6 +176,20 @@ pub fn minted_at(id: RevisionId) -> Timestamp {
     Timestamp((id.0 .0 >> (NODE_BITS + SEQUENCE_BITS)) + EPOCH_MS)
 }
 
+/// The lowest id that could have been minted in this millisecond.
+///
+/// The inverse of [`minted_at`], rounding down: a caller holding a plain
+/// timestamp rather than an id gets the start of that millisecond, so a scan
+/// bounded by one replays the ids already inside it rather than skipping them.
+/// Saturating at both ends for the reason [`SystemClock::now`] saturates, since
+/// a clock reading outside the layout means a machine nothing can fix here.
+///
+/// [`SystemClock::now`]: crate::SystemClock::now
+pub fn first_minted_at(at: Timestamp) -> RevisionId {
+    let millis = at.0.saturating_sub(EPOCH_MS).min(MAX_MILLIS);
+    RevisionId(ObjectId(millis << (NODE_BITS + SEQUENCE_BITS)))
+}
+
 /// Which node minted an id.
 pub fn minted_by(id: RevisionId) -> NodeId {
     NodeId(((id.0 .0 >> SEQUENCE_BITS) as u16) & MAX_NODE)
@@ -275,6 +289,38 @@ mod tests {
             NodeId::new(0).expect("zero fits"),
         );
         assert_eq!(mint.next(), Err(IdError::BeforeEpoch));
+    }
+
+    /// A timestamp is a usable cursor because this is its id, and the two agree
+    /// about the millisecond.
+    #[test]
+    fn a_timestamp_becomes_the_first_id_of_its_millisecond() {
+        let at = Timestamp(EPOCH_MS + 1234);
+        let first = first_minted_at(at);
+        assert_eq!(minted_at(first), at);
+        assert_eq!(minted_by(first).get(), 0);
+    }
+
+    /// Rounding down is what makes a timestamp cursor replay rather than skip:
+    /// every id minted in that millisecond sorts at or after it.
+    #[test]
+    fn the_first_id_of_a_millisecond_sorts_before_every_id_in_it() {
+        let mint = at(1234);
+        let first = first_minted_at(Timestamp(EPOCH_MS + 1234));
+        for _ in 0..8 {
+            assert!(first <= mint.next().expect("the sequence has room"));
+        }
+    }
+
+    #[test]
+    fn a_timestamp_outside_the_layout_saturates_rather_than_wrapping() {
+        assert_eq!(
+            first_minted_at(Timestamp(0)),
+            first_minted_at(Timestamp(EPOCH_MS))
+        );
+        let last = first_minted_at(Timestamp(u64::MAX));
+        assert_eq!(minted_at(last), Timestamp(EPOCH_MS + MAX_MILLIS));
+        assert!(i64::try_from(last.0 .0).is_ok(), "the sign bit stays clear");
     }
 
     #[test]
