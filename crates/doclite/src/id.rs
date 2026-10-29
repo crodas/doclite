@@ -48,17 +48,34 @@ impl NodeId {
 
     /// The node id nothing has to configure.
     ///
-    /// `DOCLITE_NODE_ID` wins when it is set and parses, so a deployment can
-    /// pin a node without giving up the zero-configuration default. Otherwise
-    /// the hostname and process id are hashed into the ten bits, which two
-    /// writers collide on about once in a thousand. Pin it in production.
-    pub fn derived() -> Self {
-        if let Ok(pinned) = std::env::var("DOCLITE_NODE_ID") {
-            if let Some(node) = pinned.trim().parse::<u16>().ok().filter(|n| *n <= MAX_NODE) {
-                return Self(node);
-            }
+    /// `DOCLITE_NODE_ID` wins when it is set, so a deployment can pin a node
+    /// without giving up the zero-configuration default. Unset, the hostname
+    /// and process id are hashed into the ten bits, which two writers collide
+    /// on about once in a thousand. Pin it in production.
+    ///
+    /// Set but unreadable is refused rather than derived around. A deployment
+    /// that wrote the variable meant to pin a node, and a typo that fell back
+    /// to the hash would leave it colliding at exactly the odds it had set out
+    /// to remove, with nothing said.
+    pub fn derived() -> Result<Self, IdError> {
+        match std::env::var("DOCLITE_NODE_ID") {
+            Ok(pinned) => Self::pinned(&pinned),
+            Err(_) => Ok(Self::hashed()),
         }
+    }
 
+    /// What one value of `DOCLITE_NODE_ID` means, separated from reading it so
+    /// the refusals are testable without a process-wide environment.
+    fn pinned(value: &str) -> Result<Self, IdError> {
+        let node: u16 = value
+            .trim()
+            .parse()
+            .map_err(|_| IdError::PinnedNodeUnreadable)?;
+        Self::new(node)
+    }
+
+    /// The ten bits a hostname and a process id hash into.
+    fn hashed() -> Self {
         let mut hasher = DefaultHasher::new();
         std::env::var("HOSTNAME")
             .unwrap_or_default()
@@ -76,6 +93,7 @@ impl NodeId {
 
 /// What stops an id from being minted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum IdError {
     /// A node id wider than the ten bits the layout gives it.
     #[error("a node id is ten bits, given {0}")]
@@ -103,6 +121,14 @@ pub enum IdError {
     /// More ids asked for in one millisecond than the sequence bits hold.
     #[error("all 4096 ids for this millisecond are spent")]
     Exhausted,
+
+    /// `DOCLITE_NODE_ID` is set to something that is not a node id.
+    ///
+    /// Refused rather than derived around, because a deployment that set it
+    /// meant to pin a node, and silently hashing one instead would leave it
+    /// colliding exactly where it thought it had stopped.
+    #[error("DOCLITE_NODE_ID is set to something that is not a number")]
+    PinnedNodeUnreadable,
 }
 
 /// What mints an id.
@@ -199,6 +225,24 @@ pub fn minted_by(id: RevisionId) -> NodeId {
 mod tests {
     use super::*;
     use crate::clock::FixedClock;
+
+    /// A deployment that wrote the variable meant to pin a node. Falling back
+    /// to the hash would leave it colliding at exactly the odds it set out to
+    /// remove, so an unreadable value is refused instead.
+    #[test]
+    fn a_pinned_node_that_is_not_a_number_is_refused() {
+        assert_eq!(NodeId::pinned("one"), Err(IdError::PinnedNodeUnreadable));
+        assert_eq!(NodeId::pinned(""), Err(IdError::PinnedNodeUnreadable));
+        assert_eq!(NodeId::pinned("-1"), Err(IdError::PinnedNodeUnreadable));
+    }
+
+    /// Out of range is the error that already existed, carrying the number, so
+    /// an operator reads what they wrote rather than that it was unreadable.
+    #[test]
+    fn a_pinned_node_too_wide_for_ten_bits_names_the_number() {
+        assert_eq!(NodeId::pinned("1024"), Err(IdError::NodeOutOfRange(1024)));
+        assert_eq!(NodeId::pinned(" 1023 ").map(|node| node.get()), Ok(1023));
+    }
 
     /// The epoch constant is load-bearing for the id's lifetime, so it is
     /// checked against the date rather than trusted.
@@ -329,8 +373,10 @@ mod tests {
         assert!(NodeId::new(1023).is_ok());
     }
 
+    /// The hash is masked to the ten bits, so the derived half can never be
+    /// the out-of-range refusal.
     #[test]
-    fn a_derived_node_id_always_fits() {
-        assert!(NodeId::derived().get() <= MAX_NODE);
+    fn a_hashed_node_id_always_fits() {
+        assert!(NodeId::hashed().get() <= MAX_NODE);
     }
 }

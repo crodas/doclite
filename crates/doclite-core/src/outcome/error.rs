@@ -11,6 +11,7 @@ use crate::model::object::ObjectId;
 /// [`StorageError::Engine`]'s is: the condition belongs to a format this crate
 /// does not name, and under a feature flag it cannot.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum CodecError {
     /// A value could not be turned into bytes.
     #[error("encoding an object: {0}")]
@@ -37,6 +38,7 @@ impl CodecError {
 
 /// An operation that could never run, caught before it is handed to an engine.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum BuildError {
     /// A step names an index the catalog was never told about.
     #[error("no index named {0}")]
@@ -86,6 +88,9 @@ pub enum BuildError {
 /// [`Outcome::Aborted`](crate::Outcome::Aborted), which is an answer: the
 /// operation did its job.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+/// `#[non_exhaustive]` because a backend nobody has written yet fails in a way
+/// nobody has named yet: ADR 0018.
+#[non_exhaustive]
 pub enum StorageError {
     /// An engine was asked about an index it was never told about.
     #[error("no index named {0}")]

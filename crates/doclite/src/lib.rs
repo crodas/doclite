@@ -148,7 +148,7 @@ pub mod transaction;
 mod write;
 
 pub use crate::bounds::{greater_than, Bounds, Comparison, IntoBounds};
-pub use crate::clock::{Clock, FixedClock, SystemClock, Timestamp};
+pub use crate::clock::{Clock, FixedClock, HeldClock, SystemClock, Timestamp};
 pub use crate::connection::Connection;
 pub use crate::error::DocumentError;
 pub use crate::feed::{Change, Changes, Checkpoint, Feed, Scan};

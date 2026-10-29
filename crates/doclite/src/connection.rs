@@ -63,7 +63,7 @@ impl<E: Engine> Connection<E, SystemClock> {
     /// gate at all, which is why it is the default; [`Connection::spawning`] is
     /// for a caller who would rather not wait.
     pub async fn open(engine: E, records: Records) -> Result<Self, DocumentError> {
-        Self::with_clock(engine, records, SystemClock, NodeId::derived()).await
+        Self::with_clock(engine, records, SystemClock, NodeId::derived()?).await
     }
 
     /// Opens without waiting for an index to be filled, running the rebuild on
@@ -81,7 +81,7 @@ impl<E: Engine> Connection<E, SystemClock> {
     where
         E: 'static,
     {
-        Self::spawning_with_clock(engine, records, spawner, SystemClock, NodeId::derived()).await
+        Self::spawning_with_clock(engine, records, spawner, SystemClock, NodeId::derived()?).await
     }
 
     /// Opens over schemas alone, for a caller with no record type to hand over.
@@ -100,7 +100,7 @@ impl<E: Engine> Connection<E, SystemClock> {
                 db,
                 bus: Bus::default(),
             }),
-            ids: Snowflake::new(SystemClock, NodeId::derived()),
+            ids: Snowflake::new(SystemClock, NodeId::derived()?),
         })
     }
 }

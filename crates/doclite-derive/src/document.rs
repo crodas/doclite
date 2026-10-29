@@ -62,7 +62,7 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
             ) -> ::doclite::Feed<'_, E, C, #record>
             where
                 E: ::doclite::doclite_core::Engine,
-                C: ::doclite::Clock + ::std::marker::Copy,
+                C: ::doclite::Clock,
             {
                 ::doclite::Feed::new(
                     conn,
@@ -101,7 +101,7 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
             pub fn query<E, C>(conn: &::doclite::Connection<E, C>) -> #builder<'_, E, C>
             where
                 E: ::doclite::doclite_core::Engine,
-                C: ::doclite::Clock + ::std::marker::Copy,
+                C: ::doclite::Clock,
             {
                 #builder(::doclite::Selection::new(conn))
             }
@@ -136,7 +136,7 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
         impl<'a, E, C> #builder<'a, E, C>
         where
             E: ::doclite::doclite_core::Engine,
-            C: ::doclite::Clock + ::std::marker::Copy,
+            C: ::doclite::Clock,
         {
             #(#methods)*
 

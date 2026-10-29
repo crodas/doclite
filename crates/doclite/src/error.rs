@@ -11,6 +11,9 @@ use crate::id::IdError;
 /// insert, so a taken email is an error rather than an answer, and
 /// `conn.insert(user).await?` reads the way it should.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+/// `#[non_exhaustive]` because the set of things that can go wrong is open:
+/// ADR 0018.
+#[non_exhaustive]
 pub enum DocumentError {
     /// A `#[unique]` key is taken, and the message names which one so a caller
     /// with two of them can tell them apart.

@@ -12,14 +12,35 @@ use crate::model::object::ObjectId;
 ///
 /// There is deliberately no `Ord` supertrait: a type may be encodable without
 /// being comparable in Rust, and requiring both would exclude it for no gain.
+///
+/// A pointer-width integer is not encodable, because the bytes it produces
+/// depend on the target that produced them:
+///
+/// ```compile_fail
+/// use doclite_core::ToOrdBytes;
+///
+/// let key = 1usize.to_ord_bytes();
+/// ```
+///
+/// The same key at a width every target agrees on:
+///
+/// ```
+/// use doclite_core::ToOrdBytes;
+///
+/// let key = 1u64.to_ord_bytes();
+/// assert_eq!(key, vec![0, 0, 0, 0, 0, 0, 0, 1]);
+/// ```
 pub trait ToOrdBytes {
     /// What this value is, for an engine that can lay a column out as more than
     /// bytes. It defaults to [`ColumnType::Bytes`], so a type nobody has
     /// described is stored as the bytes it already encodes to rather than
     /// refused.
     ///
-    /// `usize` and `isize` keep that default: they encode at native width, so
-    /// neither can claim a width a reader could rely on.
+    /// `usize` and `isize` are not columns at all. They encode at native
+    /// width, so the same key would be a different number of bytes on a
+    /// different target and a file written on one would misorder on the other.
+    /// A caller naming one gets a compile error rather than a store that works
+    /// until it moves; `u64` and `i64` are what to say instead.
     const COLUMN_TYPE: ColumnType = ColumnType::Bytes;
 
     /// The bytes an index compares. Two values compare the way their encodings
@@ -54,14 +75,13 @@ macro_rules! signed {
     };
 }
 
-unsigned!(u8 => U8, u16 => U16, u32 => U32, u64 => U64, u128 => U128, usize => Bytes);
+unsigned!(u8 => U8, u16 => U16, u32 => U32, u64 => U64, u128 => U128);
 signed!(
     i8 => u8, I8,
     i16 => u16, I16,
     i32 => u32, I32,
     i64 => u64, I64,
     i128 => u128, I128,
-    isize => usize, Bytes,
 );
 
 impl ToOrdBytes for bool {
@@ -220,8 +240,6 @@ mod tests {
     #[test]
     fn a_type_that_says_nothing_is_bytes() {
         assert_eq!(<Vec<u8> as ToOrdBytes>::COLUMN_TYPE, ColumnType::Bytes);
-        assert_eq!(<usize as ToOrdBytes>::COLUMN_TYPE, ColumnType::Bytes);
-        assert_eq!(<isize as ToOrdBytes>::COLUMN_TYPE, ColumnType::Bytes);
     }
 
     #[test]

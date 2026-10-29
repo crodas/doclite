@@ -1,14 +1,116 @@
 # Roadmap
 
-What 0.3.0 is for, and what is absent on purpose. Every item here is something
-the code or the documents already point at, so a claim in this file can be
-traced rather than taken.
+What 1.0 needs, what comes after it, and what is absent on purpose. Every item
+here is something the code or the documents already point at, so a claim in this
+file can be traced rather than taken.
 
 Like the ADRs, this is a living document. An item is deleted when it is done
 rather than ticked, because a roadmap of finished work is a changelog and there
 is already one of those.
 
-## 0.3.0
+## 1.0
+
+1.0 is a promise about a surface, so most of this is deciding rather than
+building. The surface is still moving: hand-written `Record` implementers broke
+twice in two releases and the engine seam once. That is fine now and is exactly
+what a version number is meant to stop.
+
+The ordering comes from the applications already built on this, which say in
+their own comments where it stops.
+
+### Decisions to make before the surface freezes
+
+Each of these is cheap now and impossible afterwards.
+
+**The stored name should be declarable.** The derive builds the table name and
+every index id from the struct ident, so renaming a record is a silent data
+migration: empty new indexes beside orphaned old rows. An attribute naming the
+stored form, defaulting to the ident, is what separates the two. Once callers
+hold files whose table names are Rust identifiers this cannot be introduced
+without breaking them, which is why it is first.
+
+**What the envelope promises.** `VERSION` is 2 and a mismatch is a hard decode
+failure with no reader for the version before it. ADR 0010 justifies that with
+there being nothing deployed to migrate, which stops being true at 1.0. There is
+no per-record body version either: a field added survives only because a caller
+wrote a serde default, and a field removed or retyped is covered by nothing.
+Either the envelope never breaks again or a read path for older bytes ships, and
+1.0 says which.
+
+**Whether the byte layer is public API.** `Connection::db` hands out a `Db`, so
+freezing the typed layer as it stands freezes `Operation`, `Step`, `ReadPlan`,
+`Batch`, `Region` and `KeyRange` with it. Either those are committed to, or the
+layer underneath carries no stability promise and `db` is an escape hatch at the
+caller's risk.
+
+**Whether `Record` is sealed.** Two of the last three releases broke
+hand-written implementers. If the derive is the only intended implementer,
+sealing the trait makes future additions non-breaking; if hand-writing is
+supported, it freezes and another constant like `FEEDS` can never be added.
+
+**`#[non_exhaustive]`, which is the only 1.0 item this file used to carry.** The
+error enums are where a new variant is inevitable. The structural enums are
+where matching exhaustively is the point, and where it would force the catch-all
+this project's own hygiene rules ban. The decision is per enum rather than per
+crate, which is the shape it should take.
+
+**Whether a scan can run backwards.** Every statement is ascending and row order
+is the one thing an engine may not vary, so newest-first on a feed costs a full
+scan of it. A direction means a new field on `ReadPlan` and a new obligation on
+every engine, so it is settled before the plan freezes even if the answer is no.
+
+**What conformance promises.** The suite says nothing above the engine seam: not
+revisions, not the derive, not feeds, not the rebuild gate, not `Transaction`,
+not the id mint. That is most of what 1.0 would promise, so either the suite
+grows upward or the portable contract is stated to be the engine seam alone.
+
+### Soundness
+
+**Nothing bounds what a read materialises.** A scan with no limit, `load_many`
+reading the whole span between the lowest and highest id it was handed, and
+`history` walking a chain one round trip at a time all have no ceiling, and
+`ReadValue` has no streaming shape to add one into later.
+
+**Two processes on one file damage each other.** A `Catalog` is built once per
+connection and never invalidated, and an index whose shape moved has its table
+dropped, so two processes on different code versions drop each other's index
+tables. Neither the rebuild nor the read gate crosses a process. This file
+already records the notice-delivery half of that and not this half.
+
+**One failure is quiet.** Every index of a type dropped at once reads as a
+record type nobody has seen, so the rebuild files nothing, records them
+complete, and those records stay unfindable with no later open retrying.
+
+**The retry loop has no backoff and no way in.** `with_attempts` exists on `Db`
+and `Connection` never calls it, so every caller of the typed layer is pinned at
+sixteen attempts. That is the plausible cause of the contention failure named
+below, and both halves of the fix are decisions rather than work.
+
+Reaching the count means either a sixth constructor or an attempt count a
+connection can be told after it is built, and `Db` holds it as a plain field
+behind an `Arc` today.
+
+Backoff cannot be added where the loop is. `doclite-core` depends on no runtime
+by ADR 0006, so nothing there can sleep, and a spin would block whichever
+runtime the caller is on. Waiting has to arrive the way spawning did, as a seam
+the caller fills, which is a new public trait and wants a record of its own.
+
+**A derived `NodeId` is probabilistically wrong.** Ten bits and a hash means two
+writers collide about one time in a thousand, and a collision is a lost write.
+Pinning `DOCLITE_NODE_ID` is the answer and a set-but-unreadable one is now
+refused rather than hashed around, so what is left is the unset case: whether a
+store should derive a node at all, or make the caller say which one it is.
+
+### Worth doing while the surface is open
+
+- Several indexes in one attribute. One `#[index(..)]` per index reads to clippy
+  as a repeated attribute, so every caller allows that lint for a schema that is
+  correct. Fixing it means a second spelling for the same declaration, since
+  the repetition is what the lint sees, so the question is which spelling
+  rather than whether.
+- A watch that outlives its scope, or the statement that it never will.
+
+## 1.x
 
 None of this blocks a release. Each item is a thing the design already names as
 deferred, or a gap that only shows up once somebody else is using the crate.
@@ -56,29 +158,20 @@ in-process map answers `Defined::ready` truthfully because nothing it holds
 outlives the process; a persistent one is the first that will have to mean
 both.
 
-### Decide `#[non_exhaustive]` before 1.0
-
-No public enum carries it, including the error enums. Before 1.0 that is
-covered, because a minor bump is where a breaking change goes and the changelog
-says so. After 1.0 adding a variant becomes breaking.
-
-The argument for leaving it off is not laziness: `#[non_exhaustive]` forces
-every downstream `match` into a catch-all arm, which is exactly the pattern
-this project's own hygiene rules ban. Both positions are defensible, which is
-why this should be a decision with a date rather than an omission nobody
-revisits.
-
 ## History that only exists here
 
-Three branches point at the history that existed before it was collapsed into
-one commit: `master` (a5e016a), `sqlite-engine` (600fc7e) and
-`feature/index-versioning` (2d51e5d). None shares a merge base with `main`, so
-`git diff` against any of them fails outright.
+Two branches point at a history with no root in common with `main`: `master` and
+`sqlite-engine`. `git diff` against either fails outright, because they descend
+from a different first commit.
 
-They are kept on the machine the work happens on and are not pushed, so the
-published repository is the single line `main` describes. That makes them a
-backup of exactly one copy, which is the cost of keeping the published history
-clean.
+The rest are duplicates rather than orphans. The commits squashed into one were
+recovered and `main` now carries them, so `feature/index-versioning` and the
+seven `feat/*` and `docs/*` branches beside it hold copies of work that is on
+`main` under different hashes, sharing its root and nothing else.
+
+None of them is pushed, so the published repository is the single line `main`
+describes. For `master` and `sqlite-engine` that makes them a backup of exactly
+one copy, which is the cost of keeping the published history clean.
 
 ## Known sharp edges
 
@@ -106,6 +199,12 @@ Small, real, and each one already written down where it bites.
   unfindable and no later open retries. Reaching it means something outside this
   crate edited the database, and it is the one failure here that is quiet rather
   than loud. ADR 0015.
+- **An optional unique field is recognised syntactically.** A `#[unique]` field
+  written as an `Option` files nothing when it is unset, which is what keeps two
+  records from claiming one empty key. A `type Maybe = Option<String>` alias, or
+  a newtype around one, is not read as optional, so it files the unset key like
+  any other column and the second record to leave it empty is refused as a
+  duplicate. The same limit as the two above, and the same reason.
 - **A list of owners is recognised syntactically.** `#[owner]` reads the
   field's written type, so `Vec<T>` is several owners and anything else is one.
   A `type Owners = Vec<Ref<User>>` alias or a newtype around one is read as a
@@ -170,7 +269,11 @@ unfinished. Each is argued where it is named.
   `docs/spec.md` section 3.6.
 - **Deleting an object.** Objects are appended and never rewritten, and nothing
   frees one. A layer that wants retirement models it as an ordinary indexed
-  field, because a tombstone is erasure wearing an append's clothes. ADR 0001.
+  field, because a tombstone is erasure wearing an append's clothes. ADR 0001,
+  and ADR 0017 for why this is permanent rather than deferred. The consequence
+  is owned rather than hedged: a store only grows, a caller that seeded rows it
+  later regrets keeps them, and neither a compaction pass nor a purge tool is
+  coming to take them away.
 - **A rule declared on an index.** An index is a set of rows and carries no
   constraint. Whether at most one object may hold a key is asserted by an
   operation, which is what lets one index answer for two rules. ADR 0001.

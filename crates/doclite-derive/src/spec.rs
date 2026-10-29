@@ -45,6 +45,23 @@ pub(crate) struct IndexSpec {
     many: bool,
 }
 
+/// Whether a field is written as an `Option`, read syntactically.
+///
+/// A unique index over one files nothing when it is unset, so this decides
+/// whether a record claims a key at all. Syntactic for the same reason the
+/// byte-field refusal and the list-of-owners check are: a derive has no type
+/// information, so a `type Maybe = Option<String>` alias is read as one value
+/// and claims the unset key like any other column.
+fn optional(ty: &Type) -> bool {
+    let Type::Path(path) = ty else {
+        return false;
+    };
+    path.path
+        .segments
+        .last()
+        .is_some_and(|last| last.ident == "Option")
+}
+
 impl IndexSpec {
     /// One index as an attribute asked for it, keyed on the fields it names.
     pub(crate) fn of(fields: Vec<Ident>, types: Vec<Type>, kind: Kind) -> Self {
@@ -210,6 +227,13 @@ impl IndexSpec {
     /// each: the index does not change shape, a revision just lands in every
     /// owner's feed. An empty list files nothing, which is what a record with
     /// no owners means.
+    ///
+    /// A unique index over an `Option` files nothing when the field is unset,
+    /// because the key of a unique row is the field alone and an unset one
+    /// encodes the same key for every record. Filing it would mean the second
+    /// record to leave the field empty was refused as a duplicate of the
+    /// first. A plain index keeps filing, since its key ends in the document
+    /// and two unset rows are distinct there.
     pub(crate) fn files(&self, record: &Ident) -> TokenStream {
         let constant = self.constant();
         let name = self.name(record);
@@ -217,6 +241,14 @@ impl IndexSpec {
 
         if !self.many {
             let key = self.key_of();
+            if self.kind == Kind::Unique && self.types.first().is_some_and(optional) {
+                let field = &self.fields[0];
+                return quote! {
+                    if self.#field.is_some() {
+                        into.row(&#record::#constant, #key, #name, #filing);
+                    }
+                };
+            }
             return quote! {
                 into.row(&#record::#constant, #key, #name, #filing);
             };

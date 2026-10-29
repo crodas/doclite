@@ -34,7 +34,9 @@ let user = conn
 
 The indexing attributes are all above. `#[unique]` on a field is an index with
 a rule: filing a second record under a taken key is `DocumentError::Duplicate`,
-naming the index that refused it. `#[index]` on a field is an index without one.
+naming the index that refused it. On an `Option` the rule holds only where the
+field is set, the way a null is distinct in SQL, so any number of records may
+leave it empty. `#[index]` on a field is an index without one.
 `#[index(a, b, c)]` on the struct is a compound one. A field with no attribute
 is stored and not indexed, which is the common case. The others go on the struct
 and say something else entirely: `#[immutable]` below, and `#[storage(json)]`
@@ -406,8 +408,8 @@ cargo run -p doclite-memory --example operations   # the storage layer, no deriv
 - `docs/adr/` is why it is shaped this way.
 - `crates/doclite-testkit/src/programs.rs` is the spec's worked programs,
   running against every engine.
-- [docs/roadmap.md](docs/roadmap.md) is what is left before the first release,
-  what the one after it is for, and what is absent on purpose.
+- [docs/roadmap.md](docs/roadmap.md) is what 1.0 needs, what comes after it, and
+  what is absent on purpose.
 
 ## Development
 

@@ -33,6 +33,10 @@ Before 1.0 a minor bump is where a breaking change goes.
   and a repeated owner files one row.
 - **`id::first_minted_at`**, the inverse of `id::minted_at`, rounding down to
   the first id a millisecond could hold.
+- **`HeldClock`, a clock a caller moves by hand.** `FixedClock` pins an instant,
+  which is what makes a run reproducible and a deadline untestable. A clone
+  shares the instant rather than copying it, so the clock a connection holds and
+  the one the caller keeps are the same clock.
 
 ### Changed
 
@@ -40,6 +44,32 @@ Before 1.0 a minor bump is where a breaking change goes.
   anyone implementing `Record` by hand, which the derive otherwise writes. What
   an index is for decides two things now rather than one: whether a unique key
   is claimed, and whether the row is retired when the record is superseded.
+- **A `#[unique]` field holding an `Option` claims nothing when it is unset.**
+  Behaviour change, and a fix: an unset field encoded one key for every record,
+  so the second record to leave it empty was refused as a duplicate of the
+  first. Any number may now leave it empty and a set one is claimed as before,
+  which is what a null being distinct means in SQL. Read syntactically, so an
+  `Option` behind a type alias still claims the unset key.
+- **`usize` and `isize` are no longer index columns.** Breaking, and nothing in
+  the workspace used them: they encoded at native width while declaring
+  themselves bytes, so one key was a different number of bytes on a different
+  target and a file written on one target would misorder on the other. `u64`
+  and `i64` are the replacements, and naming one of the removed types is now a
+  compile error rather than a store that works until it moves.
+- **A `DOCLITE_NODE_ID` that is set but unreadable is refused.** Breaking:
+  `NodeId::derived` answers a `Result`, and `IdError` has a variant for it,
+  which is the first thing ADR 0018 buys. A typo in the variable used to fall
+  back to the hashed node id, so a deployment that pinned a node to stop
+  colliding kept colliding at the same odds with nothing said.
+- **A generated query builder no longer requires `Copy` of a clock.** The
+  builders take the connection by reference and never needed it. A caller whose
+  clock is shared had to leak one to satisfy the bound.
+- **The error enums are `#[non_exhaustive]`.** Breaking for a caller that
+  matches one exhaustively, which now needs an arm for the variants a later
+  release will add. `DocumentError`, `StorageError`, `BuildError`, `CodecError`
+  and `IdError` report what went wrong, and that set is open; the structural
+  enums stay closed so that an engine still has to handle every one of them.
+  ADR 0018.
 - **`Record` has a `FEEDS` constant.** Breaking for the same callers and
   without a default on purpose: `None` would read as "no feed" for a
   hand-written record that has one. It is what makes a record with no owner

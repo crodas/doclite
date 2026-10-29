@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use doclite::id::{minted_at, EPOCH_MS};
 use doclite::{
     greater_than, records, Clock, Column, Connection, Document, DocumentError, DocumentId, Filing,
-    FixedClock, NodeId, Record, Revision, RevisionId, Timestamp,
+    FixedClock, HeldClock, NodeId, Record, Revision, RevisionId, Timestamp,
 };
 use serde::{Deserialize, Serialize};
 
@@ -42,6 +42,24 @@ struct User {
     accepted_tos: bool,
 }
 
+/// A record whose unique key may be unset, which is what a single-use code
+/// looks like before anybody has used it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Document)]
+struct Code {
+    #[unique]
+    consumed_by: Option<Email>,
+
+    #[index]
+    issued_to: String,
+}
+
+fn code(issued_to: &str, consumed_by: Option<&str>) -> Code {
+    Code {
+        consumed_by: consumed_by.map(|email| Email(email.into())),
+        issued_to: issued_to.into(),
+    }
+}
+
 /// Records what a record's walk yields, so a test can read it.
 #[derive(Default)]
 struct Walk(Vec<(&'static str, Filing)>);
@@ -65,7 +83,7 @@ fn clock() -> FixedClock {
 async fn open<U: Under>() -> Connection<U::Engine, FixedClock> {
     Connection::with_clock(
         U::engine().await,
-        records![User],
+        records![User, Code],
         clock(),
         NodeId::new(7).expect("seven fits in ten bits"),
     )
@@ -429,6 +447,99 @@ async fn an_update_that_keeps_its_unique_key_is_not_a_duplicate<U: Under>(
     Ok(())
 }
 
+/// A unique index claims nothing when the key is absent, which is what SQL
+/// means by a null being distinct. Before this, every unset row encoded the
+/// same key and the second record was refused as a duplicate of the first.
+async fn an_unset_unique_key_is_not_claimed<U: Under>() -> Result<(), DocumentError> {
+    let conn = open::<U>().await;
+    conn.insert(code("ana", None)).await?;
+    conn.insert(code("bruno", None)).await?;
+
+    assert_eq!(
+        Code::query(&conn)
+            .by_issued_to(String::from("ana"))
+            .get_many()
+            .await?
+            .len(),
+        1
+    );
+    assert_eq!(
+        Code::query(&conn)
+            .by_issued_to(String::from("bruno"))
+            .get_many()
+            .await?
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+async fn a_unique_key_that_is_set_is_still_claimed<U: Under>() -> Result<(), DocumentError> {
+    let conn = open::<U>().await;
+    conn.insert(code("ana", Some("a@b.c"))).await?;
+
+    assert_eq!(
+        conn.insert(code("bruno", Some("a@b.c"))).await,
+        Err(DocumentError::Duplicate {
+            index: "code_by_consumed_by"
+        })
+    );
+    Ok(())
+}
+
+/// The walk is where the row is skipped, so it is where the skipping is
+/// visible: an unset key yields no unique row at all rather than one the
+/// assertion later tolerates.
+#[test]
+fn a_walk_yields_no_unique_row_for_an_unset_key() {
+    let document = DocumentId(ObjectId(1));
+    let revision = RevisionId(ObjectId(1));
+
+    let mut unset = Walk::default();
+    code("ana", None).rows(document, revision, &mut unset);
+    assert!(!unset
+        .0
+        .iter()
+        .any(|(name, filing)| *name == "code_by_consumed_by" && *filing == Filing::Unique));
+
+    let mut set = Walk::default();
+    code("ana", Some("a@b.c")).rows(document, revision, &mut set);
+    assert!(set
+        .0
+        .iter()
+        .any(|(name, filing)| *name == "code_by_consumed_by" && *filing == Filing::Unique));
+}
+
+/// The generated query builders take the connection by reference, so they must
+/// not demand `Copy` of its clock. A caller whose clock is shared would
+/// otherwise have to leak one to satisfy a bound nothing needed, and a clock
+/// that cannot be shared is a clock a test cannot move.
+async fn a_builder_takes_a_clock_that_is_neither_copy_nor_fixed<U: Under>(
+) -> Result<(), DocumentError> {
+    let clock = HeldClock::at(Timestamp(EPOCH_MS + 1_000));
+    let conn = Connection::with_clock(
+        U::engine().await,
+        records![User, Code],
+        clock.clone(),
+        NodeId::new(7).expect("seven fits in ten bits"),
+    )
+    .await?;
+
+    conn.insert(user("a@b.c", Paraguay, "Asuncion", 30)).await?;
+    clock.advance(1_000);
+    conn.insert(user("d@e.f", Paraguay, "Asuncion", 31)).await?;
+
+    let first = User::query(&conn).by_age(30).get_one().await?;
+    let second = User::query(&conn).by_age(31).get_one().await?;
+
+    assert_eq!(
+        minted_at(second.revision()).0 - minted_at(first.revision()).0,
+        1_000,
+        "the connection read the move rather than its own copy of the instant"
+    );
+    Ok(())
+}
+
 async fn an_update_onto_a_taken_unique_key_is_refused<U: Under>() -> Result<(), DocumentError> {
     let conn = open::<U>().await;
     conn.insert(user("a@b.c", Paraguay, "Asuncion", 30)).await?;
@@ -625,6 +736,9 @@ on_every_engine! {
     a_taken_unique_key_names_the_index_and_stages_nothing,
     an_update_that_keeps_its_unique_key_is_not_a_duplicate,
     an_update_onto_a_taken_unique_key_is_refused,
+    an_unset_unique_key_is_not_claimed,
+    a_unique_key_that_is_set_is_still_claimed,
+    a_builder_takes_a_clock_that_is_neither_copy_nor_fixed,
     get_one_refuses_to_pick_a_winner,
     a_query_naming_no_index_is_refused,
     a_revision_is_stamped_with_the_millisecond_its_id_encodes,
