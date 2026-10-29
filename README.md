@@ -145,8 +145,10 @@ struct Task {
 ```
 
 That does not widen the key. One revision files one row per owner, so the
-change lands in each of their feeds, and a feed is still read for one owner. An
-empty list files nothing, which is what a record with no owners means.
+change is in any of their feeds, and a feed is still read for one owner: a list
+is an OR, and a reader that wants two owners reads two feeds and deduplicates on
+the revision. An empty list files nothing, which is what a record with no owners
+means.
 
 Reading one owner's changes is a scan of that index, from wherever the reader
 left off:

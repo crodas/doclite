@@ -44,9 +44,14 @@ machinery that was already there.
 
 **One owner or several, and the index is the same.** `#[owner]` on a field
 holding a `Vec` keys the feed on one element of it, so a revision files one row
-per owner and lands in each of their feeds. The key is not widened, because a
-feed is read for one owner: widening it would make the common read a scan of a
-group it does not want. The detection is syntactic, like the byte-field refusal
+per owner and is in any of their feeds. A list is therefore a disjunction: each
+row carries one owner and a whole key, so the reader that matches is the one
+named in the list rather than the one supplying all of it. The conjunction is
+the case this declines to build, and it is a compound owner rather than a list:
+`#[owner(a, b)]` would be one row whose key is a tuple, matched in full. The key
+is not widened for a list, because a feed is read for one owner: widening it
+would make the common read a scan of a group it does not want, and the cost of
+the disjunction belongs at write time, where it is rows rather than reads. The detection is syntactic, like the byte-field refusal
 `#[storage(json)]` already makes, so a type alias for a list is read as one
 owner and fails to compile as a column.
 

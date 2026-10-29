@@ -348,25 +348,34 @@ async fn a_feed_is_paged_by_its_own_last_revision<U: Under>() -> Result<(), Docu
 
 /// One revision, a row in every owner's feed. The index does not change shape:
 /// each row holds one owner, so each of them reads their own.
+///
+/// Which makes a list of owners a disjunction, and this is its truth table: the
+/// change is in the feed of any owner named in the list and of no other. The
+/// last two assertions are what a reader merging two owners has to know, since
+/// the one revision is in both feeds rather than split between them.
 async fn a_record_with_several_owners_is_in_each_of_their_feeds<U: Under>(
 ) -> Result<(), DocumentError> {
     let conn = open::<U>().await;
-    conn.insert(task("t-1", &["ana", "bruno"])).await?;
+    let filed = conn.insert(task("t-1", &["ana", "bruno"])).await?;
 
-    assert_eq!(
-        titles(&Task::feed(&conn, "ana".into()).get_many().await?),
-        ["t-1"]
-    );
-    assert_eq!(
-        titles(&Task::feed(&conn, "bruno".into()).get_many().await?),
-        ["t-1"]
-    );
+    let ana = Task::feed(&conn, "ana".into()).get_many().await?;
+    let bruno = Task::feed(&conn, "bruno".into()).get_many().await?;
+
+    assert_eq!(titles(&ana), ["t-1"]);
+    assert_eq!(titles(&bruno), ["t-1"]);
     assert!(
         Task::feed(&conn, "carla".into())
             .get_many()
             .await?
             .is_empty(),
         "and nobody else's"
+    );
+
+    assert_eq!(ana[0].revision(), filed.revision());
+    assert_eq!(
+        bruno[0].revision(),
+        ana[0].revision(),
+        "one change in both feeds, which is why merging two owners deduplicates"
     );
     Ok(())
 }

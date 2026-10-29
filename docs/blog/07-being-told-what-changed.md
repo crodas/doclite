@@ -177,8 +177,9 @@ struct Task {
 ```
 
 A `Vec` is several owners, and the index does not change shape. One revision
-files one row per owner, so the change lands in each of their feeds, and each of
-them still reads it one owner at a time:
+files one row per owner, so the change is in any of their feeds and each of them
+still reads it one owner at a time. A list is an OR: the reader that matches is
+the one named in it, not the one that supplies the whole list.
 
 ```rust
 conn.insert(task("t-1", &["ana", "bruno"])).await?;
@@ -192,6 +193,11 @@ of a group nobody asked for. Two edges fall out of the list rather than the
 index, and both are tested: an empty one files nothing, which is the honest
 meaning of a record with no owners yet, and a repeated one files a single row,
 because a row is its key.
+
+One owner at a time is worth taking literally. A reader that wants two owners
+reads two feeds and merges them, and a record owned by both appears in each, so
+the merge deduplicates on `Stored::revision`. The same deduplication the
+delivery guarantee already asks of it.
 
 ## A record with no owner cannot emit
 

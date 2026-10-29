@@ -93,7 +93,9 @@ document layer learns the word, and which owner a change belongs to is a fact
 about the record at the moment it was written rather than a relationship the
 store keeps. A field holding a `Vec` is several owners, and the index does not
 change: a revision files one row per owner, so a feed is read for one owner
-whichever shape the field has. Whether a record has one at all is
+whichever shape the field has. A list is a disjunction, a change being in any of
+its owners' feeds rather than in one belonging to all of them; the conjunction
+would be a compound owner, which is not written. Whether a record has one at all is
 `Record::FEEDS`, a constant, so a record with no owner cannot emit rather than
 merely never emitting.
 

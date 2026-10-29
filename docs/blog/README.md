@@ -1,8 +1,9 @@
 # The guided tour
 
-Eight posts, in order. The first three walk the layers from the bottom up; the
-next four cover the API a caller actually writes against, and the last is for
-anyone implementing a backend.
+Eight posts, in order, and an appendix. The first three walk the layers from the
+bottom up; the next four cover the API a caller actually writes against, and the
+eighth is for anyone implementing a backend. The ninth is for anyone who wants
+to see the rows.
 
 1. [How DocLite stores and finds
    things](01-how-doclite-stores-and-finds-things.md) is the storage layer:
@@ -27,6 +28,9 @@ anyone implementing a backend.
    an event.
 8. [Two ways to be an engine](08-two-ways-to-be-an-engine.md) is how to write
    the next backend, and how the conformance suite tells you it is wrong.
+9. [What a feed is on disk](09-what-a-feed-is-on-disk.md) is the appendix: a
+   feed's key bytes, the walk that files it, the steps one edit becomes, and
+   what each engine does with them.
 
 These are living documents, like the ADRs. A post is rewritten in place when the
 code it describes changes rather than corrected with a note underneath.
