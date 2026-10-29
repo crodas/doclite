@@ -139,5 +139,5 @@ worth checking rather than asserting, so it is checked. What does change is that
 the process exiting stops being the end of the data, and that a commit now costs
 a disk.
 
-Next: [two ways to be an engine](07-two-ways-to-be-an-engine.md), for anyone who
-wants their store to be the third one.
+Next: [being told what changed](07-being-told-what-changed.md), which is the
+last thing a caller writes against rather than the first thing a backend owes.

@@ -1,8 +1,8 @@
 # The guided tour
 
-Seven posts, in order. The first three walk the layers from the bottom up; the
-rest cover the API a caller actually writes against, and the last is for anyone
-implementing a backend.
+Eight posts, in order. The first three walk the layers from the bottom up; the
+next four cover the API a caller actually writes against, and the last is for
+anyone implementing a backend.
 
 1. [How DocLite stores and finds
    things](01-how-doclite-stores-and-finds-things.md) is the storage layer:
@@ -21,7 +21,11 @@ implementing a backend.
    and `Ref<T>`.
 6. [Where it is kept](06-where-it-is-kept.md) is the choice of backend, and what
    `Durability` is asking you.
-7. [Two ways to be an engine](07-two-ways-to-be-an-engine.md) is how to write
+7. [Being told what changed](07-being-told-what-changed.md) is the
+   subscription system: `#[owner]`, catching up from a checkpoint, watching for
+   what has not happened yet, and why a dropped notice costs a scan rather than
+   an event.
+8. [Two ways to be an engine](08-two-ways-to-be-an-engine.md) is how to write
    the next backend, and how the conformance suite tells you it is wrong.
 
 These are living documents, like the ADRs. A post is rewritten in place when the

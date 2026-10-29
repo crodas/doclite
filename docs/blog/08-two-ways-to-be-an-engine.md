@@ -1,8 +1,9 @@
 # Two ways to be an engine
 
-The last post swapped one backend for another and nothing above it moved. This
-one is about writing the third: what a backend owes, which of the two seams to
-implement, and how you find out you got it wrong before your users do.
+[Where it is kept](06-where-it-is-kept.md) swapped one backend for another and
+nothing above it moved. This post is about writing the third: what a backend
+owes, which of the two seams to implement, and how you find out you got it wrong
+before your users do.
 
 Sources are `crates/doclite-store/`, `crates/doclite-testkit/`, and ADRs 0011
 and 0013.
@@ -181,5 +182,6 @@ derive](02-the-struct-is-the-index.md) turns a struct into its own indexes;
 [nothing is locked](03-nothing-is-locked.md) is what happens when two writers
 meet; [transactions](04-several-records-at-once.md) make several records one
 unit of work; [the type](05-what-the-type-settles.md) settles what the store
-should not have to; and [where it is kept](06-where-it-is-kept.md) is the choice
-of backend this post explains how to extend.
+should not have to; [where it is kept](06-where-it-is-kept.md) is the choice of
+backend this post explains how to extend; and [being told what
+changed](07-being-told-what-changed.md) is one more index, read two ways.
